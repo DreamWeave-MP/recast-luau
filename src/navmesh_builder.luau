@@ -3,6 +3,7 @@
 -- Pure-Luau implementation of DetourNavMeshBuilder's binary tile format.
 -- Layout and packing intentionally match upstream Detour 1:1 (DT_NAVMESH_VERSION 7,
 -- DT_VERTS_PER_POLYGON 6, 32-bit dtPolyRef configuration).
+local data = require '@dream/data'
 
 local Builder = {}
 
@@ -102,224 +103,194 @@ local function polyVertCount(params, poly0)
     return n
 end
 
--- Stable bottom-up mergesort. Upstream uses qsort(), whose normal glibc
--- allocation path is stable in our oracle environment; stability is observable
--- in serialized BV node order when axis minima tie. Axis-specialized loops keep
--- the hot comparison free of a per-item component branch.
-local function sortRangeX(order, scratch, mins, first, last)
-    local count = last - first + 1
-    if count <= 8 then
-        for i = first + 1, last do
-            local id = order[i]
-            local key = mins[id].X
-            local j = i - 1
-            while j >= first and mins[order[j]].X > key do
-                order[j + 1] = order[j]
-                j -= 1
-            end
-            order[j + 1] = id
-        end
-        return
+-- A subtree of this many polygons or fewer is sorted here, by insertion; above it one stable
+-- argsort in the data plane costs less than the loop, its calls included.
+local InsertionLimit = 16
+
+--- What the BV tree reads of a tile's normalized parameters.
+type TreeParams = {
+  verts: buffer,
+  polys: buffer,
+  polyCount: number,
+  nvp: number,
+  detailMeshes: buffer?,
+  detailVerts: buffer?,
+  bmin: vector,
+  cs: number,
+  ch: number,
+}
+
+--- Each polygon's quantized bounds, and its minimum again as three f32 columns (X, then Y, then
+--- Z, each `polyCount` elements) for the sorts to read as keys.
+local function quantizedBounds(params: TreeParams): ({ vector }, { vector }, buffer)
+  local polygonCount = params.polyCount
+  local mins: { vector }, maxs: { vector } = table.create(polygonCount), table.create(polygonCount)
+  local keys = buffer.create(polygonCount * 12)
+  local quantization = 1 / params.cs
+
+  for polygon = 0, polygonCount - 1 do
+    local minX, minY, minZ, maxX, maxY, maxZ
+
+    if params.detailMeshes then
+      local mesh = polygon * 16
+      local firstVertex = buffer.readu32(params.detailMeshes, mesh)
+      local vertexCount = buffer.readu32(params.detailMeshes, mesh + 4)
+      local vertex = readF32Vec3(params.detailVerts, firstVertex * 12)
+      local lowX, lowY, lowZ = vertex.X, vertex.Y, vertex.Z
+      local highX, highY, highZ = lowX, lowY, lowZ
+
+      for sample = 1, vertexCount - 1 do
+        vertex = readF32Vec3(params.detailVerts, (firstVertex + sample) * 12)
+        lowX, lowY, lowZ = math.min(lowX, vertex.X), math.min(lowY, vertex.Y), math.min(lowZ, vertex.Z)
+        highX, highY, highZ = math.max(highX, vertex.X), math.max(highY, vertex.Y), math.max(highZ, vertex.Z)
+      end
+
+      minX = clampi(math.floor((lowX - params.bmin.X) * quantization), 0, 0xffff)
+      minY = clampi(math.floor((lowY - params.bmin.Y) * quantization), 0, 0xffff)
+      minZ = clampi(math.floor((lowZ - params.bmin.Z) * quantization), 0, 0xffff)
+      maxX = clampi(math.floor((highX - params.bmin.X) * quantization), 0, 0xffff)
+      maxY = clampi(math.floor((highY - params.bmin.Y) * quantization), 0, 0xffff)
+      maxZ = clampi(math.floor((highZ - params.bmin.Z) * quantization), 0, 0xffff)
+    else
+      local corners = polygon * params.nvp * 4
+      local vertex = buffer.readu16(params.polys, corners) * 6
+
+      minX = buffer.readu16(params.verts, vertex)
+      minY = buffer.readu16(params.verts, vertex + 2)
+      minZ = buffer.readu16(params.verts, vertex + 4)
+      maxX, maxY, maxZ = minX, minY, minZ
+
+      for corner = 1, params.nvp - 1 do
+        local index = buffer.readu16(params.polys, corners + corner * 2)
+
+        if index == MESH_NULL_IDX then break end
+
+        vertex = index * 6
+
+        local cellX, cellY = buffer.readu16(params.verts, vertex), buffer.readu16(params.verts, vertex + 2)
+        local cellZ = buffer.readu16(params.verts, vertex + 4)
+
+        minX, minY, minZ = math.min(minX, cellX), math.min(minY, cellY), math.min(minZ, cellZ)
+        maxX, maxY, maxZ = math.max(maxX, cellX), math.max(maxY, cellY), math.max(maxZ, cellZ)
+      end
+
+      minY = math.floor(minY * params.ch / params.cs)
+      maxY = math.ceil(maxY * params.ch / params.cs)
     end
-    local width = 1
-    while width < count do
-        local left = first
-        while left <= last do
-            local mid = math.min(left + width - 1, last)
-            local right = math.min(left + width * 2 - 1, last)
-            if mid >= right then
-                table.move(order, left, right, left, scratch)
-            else
-                local i, j, k = left, mid + 1, left
-                while i <= mid and j <= right do
-                    local ai, bi = order[i], order[j]
-                    if mins[ai].X <= mins[bi].X then scratch[k] = ai; i += 1 else scratch[k] = bi; j += 1 end
-                    k += 1
-                end
-                if i <= mid then table.move(order, i, mid, k, scratch); k += mid - i + 1 end
-                if j <= right then table.move(order, j, right, k, scratch) end
-            end
-            left += width * 2
-        end
-        table.move(scratch, first, last, first, order)
-        width *= 2
-    end
+
+    mins[polygon + 1] = vector.create(minX, minY, minZ)
+    maxs[polygon + 1] = vector.create(maxX, maxY, maxZ)
+    buffer.writef32(keys, polygon * 4, minX)
+    buffer.writef32(keys, (polygonCount + polygon) * 4, minY)
+    buffer.writef32(keys, (polygonCount * 2 + polygon) * 4, minZ)
+  end
+
+  return mins, maxs, keys
 end
 
-local function sortRangeY(order, scratch, mins, first, last)
-    local count = last - first + 1
-    if count <= 8 then
-        for i = first + 1, last do
-            local id = order[i]
-            local key = mins[id].Y
-            local j = i - 1
-            while j >= first and mins[order[j]].Y > key do
-                order[j + 1] = order[j]
-                j -= 1
-            end
-            order[j + 1] = id
-        end
-        return
-    end
-    local width = 1
-    while width < count do
-        local left = first
-        while left <= last do
-            local mid = math.min(left + width - 1, last)
-            local right = math.min(left + width * 2 - 1, last)
-            if mid >= right then
-                table.move(order, left, right, left, scratch)
-            else
-                local i, j, k = left, mid + 1, left
-                while i <= mid and j <= right do
-                    local ai, bi = order[i], order[j]
-                    if mins[ai].Y <= mins[bi].Y then scratch[k] = ai; i += 1 else scratch[k] = bi; j += 1 end
-                    k += 1
-                end
-                if i <= mid then table.move(order, i, mid, k, scratch); k += mid - i + 1 end
-                if j <= right then table.move(order, j, right, k, scratch) end
-            end
-            left += width * 2
-        end
-        table.move(scratch, first, last, first, order)
-        width *= 2
-    end
+local function writeBVNode(out: buffer, node: number, low: vector, high: vector, index: number)
+  local offset = node * BV_BYTES
+
+  buffer.writeu16(out, offset, low.X)
+  buffer.writeu16(out, offset + 2, low.Y)
+  buffer.writeu16(out, offset + 4, low.Z)
+  buffer.writeu16(out, offset + 6, high.X)
+  buffer.writeu16(out, offset + 8, high.Y)
+  buffer.writeu16(out, offset + 10, high.Z)
+  buffer.writei32(out, offset + 12, index)
 end
 
-local function sortRangeZ(order, scratch, mins, first, last)
-    local count = last - first + 1
-    if count <= 8 then
-        for i = first + 1, last do
-            local id = order[i]
-            local key = mins[id].Z
-            local j = i - 1
-            while j >= first and mins[order[j]].Z > key do
-                order[j + 1] = order[j]
-                j -= 1
-            end
-            order[j + 1] = id
-        end
-        return
-    end
-    local width = 1
-    while width < count do
-        local left = first
-        while left <= last do
-            local mid = math.min(left + width - 1, last)
-            local right = math.min(left + width * 2 - 1, last)
-            if mid >= right then
-                table.move(order, left, right, left, scratch)
-            else
-                local i, j, k = left, mid + 1, left
-                while i <= mid and j <= right do
-                    local ai, bi = order[i], order[j]
-                    if mins[ai].Z <= mins[bi].Z then scratch[k] = ai; i += 1 else scratch[k] = bi; j += 1 end
-                    k += 1
-                end
-                if i <= mid then table.move(order, i, mid, k, scratch); k += mid - i + 1 end
-                if j <= right then table.move(order, j, right, k, scratch) end
-            end
-            left += width * 2
-        end
-        table.move(scratch, first, last, first, order)
-        width *= 2
-    end
-end
+--- The tile's dtBVNode array, in upstream's order: each subtree's polygons are sorted by their
+--- minimum on the subtree's longest axis, then halved. That order is part of the tile's bytes,
+--- and upstream's qsort leaves tied polygons as it found them, so every sort here is stable.
+local function buildBVTree(params: TreeParams): buffer
+  local polygonCount = params.polyCount
+  local nodes = buffer.create(polygonCount * 2 * BV_BYTES)
 
-local function makeBVItems(params)
-    local mins = table.create(params.polyCount)
-    local maxs = table.create(params.polyCount)
-    local order = table.create(params.polyCount)
-    local qfac = 1 / params.cs
-    for p0 = 0, params.polyCount - 1 do
-        local minx, miny, minz, maxx, maxy, maxz
-        if params.detailMeshes ~= nil then
-            local mo = p0 * 16
-            local vb = buffer.readu32(params.detailMeshes, mo)
-            local ndv = buffer.readu32(params.detailMeshes, mo + 4)
-            local v = readF32Vec3(params.detailVerts, vb * 12)
-            local bx0, by0, bz0 = v.X, v.Y, v.Z
-            local bx1, by1, bz1 = bx0, by0, bz0
-            for j0 = 1, ndv - 1 do
-                v = readF32Vec3(params.detailVerts, (vb + j0) * 12)
-                bx0, by0, bz0 = math.min(bx0, v.X), math.min(by0, v.Y), math.min(bz0, v.Z)
-                bx1, by1, bz1 = math.max(bx1, v.X), math.max(by1, v.Y), math.max(bz1, v.Z)
-            end
-            minx = clampi(math.floor((bx0 - params.bmin.X) * qfac), 0, 0xffff)
-            miny = clampi(math.floor((by0 - params.bmin.Y) * qfac), 0, 0xffff)
-            minz = clampi(math.floor((bz0 - params.bmin.Z) * qfac), 0, 0xffff)
-            maxx = clampi(math.floor((bx1 - params.bmin.X) * qfac), 0, 0xffff)
-            maxy = clampi(math.floor((by1 - params.bmin.Y) * qfac), 0, 0xffff)
-            maxz = clampi(math.floor((bz1 - params.bmin.Z) * qfac), 0, 0xffff)
-        else
-            local po = p0 * params.nvp * 4
-            local vi = buffer.readu16(params.polys, po)
-            local vo = vi * 6
-            minx = buffer.readu16(params.verts, vo)
-            miny = buffer.readu16(params.verts, vo + 2)
-            minz = buffer.readu16(params.verts, vo + 4)
-            maxx, maxy, maxz = minx, miny, minz
-            for j0 = 1, params.nvp - 1 do
-                vi = buffer.readu16(params.polys, po + j0 * 2)
-                if vi == MESH_NULL_IDX then break end
-                vo = vi * 6
-                local x, y, z = buffer.readu16(params.verts, vo), buffer.readu16(params.verts, vo + 2), buffer.readu16(params.verts, vo + 4)
-                minx, miny, minz = math.min(minx, x), math.min(miny, y), math.min(minz, z)
-                maxx, maxy, maxz = math.max(maxx, x), math.max(maxy, y), math.max(maxz, z)
-            end
-            miny = math.floor(miny * params.ch / params.cs)
-            maxy = math.ceil(maxy * params.ch / params.cs)
-        end
-        local id = p0 + 1
-        mins[id] = vector.create(minx, miny, minz)
-        maxs[id] = vector.create(maxx, maxy, maxz)
-        order[id] = id
-    end
-    return mins, maxs, order
-end
+  if polygonCount == 0 then return nodes end
 
-local function writeBVNode(out, node0, mn, mx, index)
-    local o = node0 * BV_BYTES
-    buffer.writeu16(out, o, mn.X); buffer.writeu16(out, o + 2, mn.Y); buffer.writeu16(out, o + 4, mn.Z)
-    buffer.writeu16(out, o + 6, mx.X); buffer.writeu16(out, o + 8, mx.Y); buffer.writeu16(out, o + 10, mx.Z)
-    buffer.writei32(out, o + 12, index)
-end
+  local mins, maxs, keys = quantizedBounds(params)
+  local order = buffer.create(polygonCount * 4)
+  -- What one argsort works in: the subtree's polygons, their keys in that order, the
+  -- permutation that sorts them, and the merge's own scratch.
+  local picked, pickedKeys = buffer.create(polygonCount * 4), buffer.create(polygonCount * 4)
+  local permutation, scratch = buffer.create(polygonCount * 4), buffer.create(polygonCount * 4)
+  local nodeCount = 0
 
-local function buildBVTree(params)
-    local nodes = buffer.create(params.polyCount * 2 * BV_BYTES)
-    if params.polyCount == 0 then return nodes end
-    local mins, maxs, order = makeBVItems(params)
-    local scratch = table.create(params.polyCount)
-    local curNode = 0
-    local function subdivide(first, last)
-        local count = last - first + 1
-        local thisNode = curNode
-        curNode += 1
-        if count == 1 then
-            local id = order[first]
-            writeBVNode(nodes, thisNode, mins[id], maxs[id], id - 1)
-            return
-        end
-        local firstId = order[first]
-        local mn, mx = mins[firstId], maxs[firstId]
-        for i = first + 1, last do
-            local id = order[i]
-            mn = vector.min(mn, mins[id])
-            mx = vector.max(mx, maxs[id])
-        end
-        local ext = mx - mn
-        local axis = 1
-        local maxExtent = ext.X
-        if ext.Y > maxExtent then axis, maxExtent = 2, ext.Y end
-        if ext.Z > maxExtent then axis = 3 end
-        if axis == 1 then sortRangeX(order, scratch, mins, first, last) elseif axis == 2 then sortRangeY(order, scratch, mins, first, last) else sortRangeZ(order, scratch, mins, first, last) end
-        local split = first + math.floor(count / 2) - 1
-        subdivide(first, split)
-        subdivide(split + 1, last)
-        writeBVNode(nodes, thisNode, mn, mx, -(curNode - thisNode))
+  for polygon = 0, polygonCount - 1 do
+    buffer.writeu32(order, polygon * 4, polygon)
+  end
+
+  --- Sorts the `count` polygons of `order` from `first` by the key column at byte `column`.
+  local function sort(first: number, count: number, column: number)
+    if count > InsertionLimit then
+      buffer.copy(picked, 0, order, first * 4, count * 4)
+      data.gather(keys, 'f32', column, polygonCount, picked, pickedKeys, 0, count)
+      data.argsort(pickedKeys, 'f32', 0, count, permutation, 0, scratch)
+      data.gather(picked, 'u32', 0, count, permutation, order, first * 4, count)
+
+      return
     end
-    subdivide(1, params.polyCount)
-    return nodes
+
+    for position = first + 1, first + count - 1 do
+      local polygon = buffer.readu32(order, position * 4)
+      local key = buffer.readf32(keys, column + polygon * 4)
+      local slot = position
+
+      while slot > first do
+        local earlier = buffer.readu32(order, slot * 4 - 4)
+
+        if buffer.readf32(keys, column + earlier * 4) <= key then break end
+
+        buffer.writeu32(order, slot * 4, earlier)
+        slot -= 1
+      end
+
+      buffer.writeu32(order, slot * 4, polygon)
+    end
+  end
+
+  local function subdivide(first: number, count: number)
+    local node = nodeCount
+
+    nodeCount += 1
+
+    local polygon = buffer.readu32(order, first * 4) + 1
+    local low, high = mins[polygon], maxs[polygon]
+
+    if count == 1 then
+      writeBVNode(nodes, node, low, high, polygon - 1)
+
+      return
+    end
+
+    for position = first + 1, first + count - 1 do
+      polygon = buffer.readu32(order, position * 4) + 1
+      low = vector.min(low, mins[polygon])
+      high = vector.max(high, maxs[polygon])
+    end
+
+    local extent = high - low
+    local axis, longest = 0, extent.X
+
+    if extent.Y > longest then
+      axis, longest = 1, extent.Y
+    end
+
+    if extent.Z > longest then axis = 2 end
+
+    sort(first, count, axis * polygonCount * 4)
+
+    local half = count // 2
+
+    subdivide(first, half)
+    subdivide(first + half, count - half)
+    writeBVNode(nodes, node, low, high, node - nodeCount)
+  end
+
+  subdivide(0, polygonCount)
+
+  return nodes
 end
 
 local function normalizeParams(params)
