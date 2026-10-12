@@ -1,0 +1,650 @@
+--!strict
+--!native
+-- The Recast/Detour port, timed from Luau: Detour tile serialization with and without its BV
+-- tree, the Recast build pipeline, the runtime navmesh and its box queries, pathfinding, the
+-- crowd, the tile cache, and tiled lookups. Run by `jess run --package . bench/bench.luau
+-- [filter]`, on a release build. Prints one line per workload: its name, a tab, seconds per call.
+local builder = require '@recast/navmesh-builder'
+local bytes = require '@dream/bytes'
+local core = require '@recast/core'
+local crowds = require '@recast/crowd'
+local detour = require '@recast/detour'
+local recast = require '@recast'
+local tilecache = require '@recast/tilecache'
+
+-- A build without the verified toolchain runs Luau slower than a release does, so a number from
+-- one says nothing about what ships.
+if not jess.bench.verified then
+  error('recast bench: this jess was built without the verified toolchain: measure on a release build', 0)
+end
+
+local filter: string? = ...
+local only = if filter and filter ~= '' then filter else nil
+
+local function median(samples: { number }): number
+  table.sort(samples)
+  return samples[(#samples + 1) // 2]
+end
+
+-- A full collection, run between batches, so one batch's garbage isn't the next one's collection.
+local collect = jess.bench.collect
+
+--- Seconds per call of `body`: warmed up, then the median of seven batches of a size that
+--- takes about a tenth of a second.
+local function measure(body: () -> unknown): number
+  collect()
+  body()
+  local start = os.clock()
+  body()
+  local once = math.max(os.clock() - start, 1e-7)
+  local iterations = math.max(1, math.floor(0.1 / once))
+  local samples = {}
+
+  for batch = 1, 7 do
+    collect()
+    start = os.clock()
+
+    for _ = 1, iterations do
+      body()
+    end
+
+    samples[batch] = (os.clock() - start) / iterations
+  end
+
+  return median(samples)
+end
+
+--- Times `body`, then holds the digest of one more call's result to `expected`: a workload that
+--- stopped doing its work must not post a time.
+local function workload<Result>(name: string, expected: string, body: () -> Result, digest: (Result) -> string)
+  if only and not string.find(name, only, 1, true) then return end
+
+  local seconds = measure(body)
+  local got = digest(body())
+
+  if got ~= expected then error(`recast bench: '{name}' gave {got}, not {expected}`, 0) end
+
+  print(`{name}\t{seconds}`)
+end
+
+type PolyMesh = {
+  verts: buffer,
+  nverts: number,
+  polys: buffer,
+  npolys: number,
+  nvp: number,
+  flags: buffer,
+  areas: buffer,
+  bmin: vector,
+  bmax: vector,
+  cs: number,
+  ch: number,
+  walkableClimb: number,
+}
+
+local QuadVertices = 4
+
+--- An rcPolyMesh of `size` by `size` unit quads on a flat grid, each wired to its four
+--- neighbours: every quantized minimum ties across a whole row or column, which is the case the
+--- serialized BV tree's order has to get right.
+local function gridMesh(size: number): PolyMesh
+  local side = size + 1
+  local vertexCount, polygonCount = side * side, size * size
+  local verts = buffer.create(vertexCount * 6)
+
+  for row = 0, size do
+    for column = 0, size do
+      local offset = (row * side + column) * 6
+
+      buffer.writeu16(verts, offset, column)
+      buffer.writeu16(verts, offset + 4, row)
+    end
+  end
+
+  local polys = buffer.create(polygonCount * QuadVertices * 4)
+  local flags, areas = buffer.create(polygonCount * 2), buffer.create(polygonCount)
+
+  buffer.fill(polys, 0, 0xff)
+  buffer.fill(areas, 0, 1)
+
+  for row = 0, size - 1 do
+    for column = 0, size - 1 do
+      local polygon = row * size + column
+      local offset = polygon * QuadVertices * 4
+      local corner = row * side + column
+
+      buffer.writeu16(flags, polygon * 2, 1)
+      buffer.writeu16(polys, offset, corner)
+      buffer.writeu16(polys, offset + 2, corner + 1)
+      buffer.writeu16(polys, offset + 4, corner + side + 1)
+      buffer.writeu16(polys, offset + 6, corner + side)
+
+      if row > 0 then buffer.writeu16(polys, offset + 8, polygon - size) end
+
+      if column < size - 1 then buffer.writeu16(polys, offset + 10, polygon + 1) end
+
+      if row < size - 1 then buffer.writeu16(polys, offset + 12, polygon + size) end
+
+      if column > 0 then buffer.writeu16(polys, offset + 14, polygon - 1) end
+    end
+  end
+
+  return {
+    verts = verts,
+    nverts = vertexCount,
+    polys = polys,
+    npolys = polygonCount,
+    nvp = QuadVertices,
+    flags = flags,
+    areas = areas,
+    bmin = vector.zero,
+    bmax = vector.create(size, 1, size),
+    cs = 1,
+    ch = 1,
+    walkableClimb = 1,
+  }
+end
+
+type DetailMesh = { meshes: buffer, verts: buffer, nverts: number, tris: buffer, ntris: number }
+
+--- A detail mesh for `gridMesh(size)`: each quad's corners and a centre sample at one of five
+--- heights, fanned into four triangles. The heights tie often, as terrain samples do.
+local function gridDetail(size: number): DetailMesh
+  local side = size + 1
+  local polygonCount = size * size
+  local meshes = buffer.create(polygonCount * 16)
+  local verts, tris = buffer.create(polygonCount * 5 * 12), buffer.create(polygonCount * 4 * 4)
+  local cornerOffsets = { 0, 0, 1, 0, 1, 1, 0, 1 }
+
+  for row = 0, size - 1 do
+    for column = 0, size - 1 do
+      local polygon = row * size + column
+      local vertex, triangle = polygon * 5 * 12, polygon * 4 * 4
+
+      buffer.writeu32(meshes, polygon * 16, polygon * 5)
+      buffer.writeu32(meshes, polygon * 16 + 4, 5)
+      buffer.writeu32(meshes, polygon * 16 + 8, polygon * 4)
+      buffer.writeu32(meshes, polygon * 16 + 12, 4)
+
+      for corner = 0, 3 do
+        buffer.writef32(verts, vertex + corner * 12, column + cornerOffsets[corner * 2 + 1])
+        buffer.writef32(verts, vertex + corner * 12 + 8, row + cornerOffsets[corner * 2 + 2])
+        buffer.writeu8(tris, triangle + corner * 4, corner)
+        buffer.writeu8(tris, triangle + corner * 4 + 1, (corner + 1) % 4)
+        buffer.writeu8(tris, triangle + corner * 4 + 2, 4)
+        buffer.writeu8(tris, triangle + corner * 4 + 3, 1)
+      end
+
+      buffer.writef32(verts, vertex + 48, column + 0.5)
+      buffer.writef32(verts, vertex + 52, (column * 7 + row * 13) % 5 * 0.25)
+      buffer.writef32(verts, vertex + 56, row + 0.5)
+    end
+  end
+
+  return { meshes = meshes, verts = verts, nverts = polygonCount * 5, tris = tris, ntris = polygonCount * 4 }
+end
+
+local function tileOptions(buildBvTree: boolean)
+  return { walkableHeight = 2, walkableRadius = 0.5, walkableClimb = 0.5, buildBvTree = buildBvTree }
+end
+
+local function tileDigest(tile: buffer): string
+  return bytes.sha256(tile)
+end
+
+--- Terrain `size` cells on a side with a ridge every eight cells, so the detail mesh has
+--- interior samples and the polygons differ in height.
+local function terrain(size: number): ({ vector }, { { number } })
+  local side = size + 1
+  local vertices: { vector } = table.create(side * side)
+  local triangles: { { number } } = table.create(size * size * 2)
+
+  for row = 0, size do
+    for column = 0, size do
+      local height = if column % 8 == 4 or row % 8 == 4 then 0.5 else 0
+
+      table.insert(vertices, vector.create(column, height, row))
+    end
+  end
+
+  for row = 0, size - 1 do
+    for column = 0, size - 1 do
+      local corner = row * side + column + 1
+
+      table.insert(triangles, { corner, corner + side, corner + 1 })
+      table.insert(triangles, { corner + 1, corner + side, corner + side + 1 })
+    end
+  end
+
+  return vertices, triangles
+end
+
+--- The maze of `bench/maze.luau`: walls every eight columns, open at alternating ends.
+local function maze(size: number): ({ vector }, { { number } })
+  local side = size + 1
+  local vertices: { vector } = table.create(side * side)
+  local triangles: { { number } } = {}
+
+  for row = 0, size do
+    for column = 0, size do
+      table.insert(vertices, vector.create(column, 0, row))
+    end
+  end
+
+  local function blocked(column: number, row: number): boolean
+    if column <= 0 or row <= 0 or column >= size - 1 or row >= size - 1 then return false end
+
+    if column % 8 ~= 4 then return false end
+
+    if (column - 4) // 8 % 2 == 0 then return row < size - 6 end
+
+    return row > 5
+  end
+
+  for row = 0, size - 1 do
+    for column = 0, size - 1 do
+      if blocked(column, row) then continue end
+
+      local corner = row * side + column + 1
+
+      table.insert(triangles, { corner, corner + side, corner + 1 })
+      table.insert(triangles, { corner + 1, corner + side, corner + side + 1 })
+    end
+  end
+
+  return vertices, triangles
+end
+
+local function numberDigest(value: number): string
+  return string.format('%.17g', value)
+end
+
+do
+  local small, large = gridMesh(127), gridMesh(254)
+  local detail = gridDetail(127)
+
+  workload('tile, 16129 polygons, no BV tree', '49e48a3c07fa975f6149f5276ef1863320371e05a68ab0b076d92f86d371246d', function()
+    return assert(builder.createNavMeshDataFromPolyMesh(small, nil, tileOptions(false)))
+  end, tileDigest)
+
+  workload('tile, 16129 polygons, BV tree', '33172af29ccc18263d0565a738f9b09dbabfb4748744e957a7aba498a905f2d7', function()
+    return assert(builder.createNavMeshDataFromPolyMesh(small, nil, tileOptions(true)))
+  end, tileDigest)
+
+  workload('tile, 16129 polygons with a detail mesh, BV tree', 'bec0c9bc3e9f4845b71a2f6d114c3c4c72dc1a1331be0b5b8b373f4c928657d2', function()
+    return assert(builder.createNavMeshDataFromPolyMesh(small, detail, tileOptions(true)))
+  end, tileDigest)
+
+  workload('tile, 64516 polygons, no BV tree', '75f382d4e120fe0d48884f37e8ade3666cd12a6ab6540ae99b7681262e7ec9df', function()
+    return assert(builder.createNavMeshDataFromPolyMesh(large, nil, tileOptions(false)))
+  end, tileDigest)
+
+  workload('tile, 64516 polygons, BV tree', '32524cbbbf9e175dcd9c64a69ac65e217c88f975f06d876b8e0c68785148e710', function()
+    return assert(builder.createNavMeshDataFromPolyMesh(large, nil, tileOptions(true)))
+  end, tileDigest)
+end
+
+do
+  local config = {
+    cs = 0.5,
+    ch = 0.25,
+    walkableSlopeAngle = 50,
+    walkableHeight = 4,
+    walkableClimb = 2,
+    walkableRadius = 0,
+    maxSimplificationError = 1.3,
+    detailSampleDist = 2,
+    detailSampleMaxError = 0.1,
+  }
+
+  local vertices, triangles = terrain(16)
+  local build = detour.buildFromTriangles(vertices, triangles, config)
+
+  workload('recast build with detail, 512 triangles', '7 polygons, 138 detail vertices, 178 detail triangles', function()
+    return detour.buildFromTriangles(vertices, triangles, config)
+  end, function(built): string
+    return `{built.polyMesh.npolys} polygons, {built.detailMesh.nverts} detail vertices, {built.detailMesh.ntris} detail triangles`
+  end)
+
+  workload('tile from a recast build, BV tree', '655ce0bd1dd7ec1e3174257645c8e96a363fedaa86b76975173ac28308d23903', function()
+    return assert(builder.createNavMeshDataFromPolyMesh(build.polyMesh, build.detailMesh, tileOptions(true)))
+  end, tileDigest)
+
+  local tile = assert(builder.createNavMeshDataFromPolyMesh(build.polyMesh, build.detailMesh, tileOptions(true)))
+
+  workload('load a tile from a recast build', '7 polygons, 14 nodes', function()
+    return assert((detour.loadNavMeshData(tile)))
+  end, function(navmesh): string
+    return `{navmesh.polyCount} polygons, {navmesh.bvNodeCount} nodes`
+  end)
+end
+
+do
+  local config = {
+    cs = 1,
+    ch = 0.5,
+    walkableHeight = 2,
+    walkableClimb = 1,
+    walkableRadius = 0,
+    maxSimplificationError = 0.1,
+    maxEdgeLen = 0,
+  }
+
+  local vertices, triangles = maze(64)
+  local build = recast.build(vertices, triangles, config)
+  local start, finish = vector.create(1.5, 0, 1.5), vector.create(62.5, 0, 62.5)
+  local extents = vector.create(2, 4, 2)
+
+  workload('recast build, maze of 7392 triangles', '2468 spans, 34 polygons, 34 queryable', function()
+    return recast.build(vertices, triangles, config)
+  end, function(built): string
+    return `{built.compact.spanCount} spans, {built.polyMesh.npolys} polygons, {built.navmesh.polyCount} queryable`
+  end)
+
+  workload('query a path through the maze', '33 polygons, 34 points', function()
+    return recast.query(build.navmesh, start, finish, extents)
+  end, function(result): string
+    return `{#result.corridor} polygons, {#result.points} points`
+  end)
+end
+
+do
+  local size = 128
+  local side = size + 1
+  local vertices = buffer.create(side * side * 12)
+  local triangles = buffer.create(size * size * 2 * 12)
+
+  for row = 0, size do
+    for column = 0, size do
+      local offset = (row * side + column) * 12
+
+      buffer.writef32(vertices, offset, column)
+      buffer.writef32(vertices, offset + 8, row)
+    end
+  end
+
+  for row = 0, size - 1 do
+    for column = 0, size - 1 do
+      local corner = row * side + column
+      local offset = (row * size + column) * 24
+
+      buffer.writeu32(triangles, offset, corner)
+      buffer.writeu32(triangles, offset + 4, corner + side)
+      buffer.writeu32(triangles, offset + 8, corner + 1)
+      buffer.writeu32(triangles, offset + 12, corner + 1)
+      buffer.writeu32(triangles, offset + 16, corner + side)
+      buffer.writeu32(triangles, offset + 20, corner + side + 1)
+    end
+  end
+
+  workload('rasterize 32768 triangles', '16385 spans', function()
+    local heightfield = core.createHeightfield(size, size, vector.create(0, -1, 0), vector.create(size, 2, size), 1, 0.5)
+
+    core.rasterizeWalkableTriangles(45, vertices, triangles, heightfield, 1)
+
+    return heightfield
+  end, function(heightfield): string
+    return `{heightfield.spanCount} spans`
+  end)
+end
+
+do
+  local mesh = gridMesh(128)
+  local navmesh = detour.buildPolyMeshNavMesh(mesh)
+  local halfExtents = vector.create(0.51, 1, 0.51)
+
+  workload('runtime navmesh from 16384 polygons', '16384 polygons, 32767 nodes', function()
+    return detour.buildPolyMeshNavMesh(mesh)
+  end, function(built): string
+    return `{built.polyCount} polygons, {built.bvNodeCount} nodes`
+  end)
+
+  workload('1000 box queries over 16384 polygons', '36207', function()
+    local hits = 0
+
+    for query = 1, 1000 do
+      local center = vector.create(query * 97 % 128 + 0.5, 0, query * 193 % 128 + 0.5)
+
+      hits += #detour.queryPolygons(navmesh, center, halfExtents, nil)
+    end
+
+    return hits
+  end, numberDigest)
+
+  workload('1000 nearest-polygon queries over 16384 polygons', '8144380', function()
+    local total = 0
+
+    for query = 1, 1000 do
+      local center = vector.create(query * 97 % 128 + 0.5, 0, query * 193 % 128 + 0.5)
+
+      total += assert((detour.findNearestPoly(navmesh, center, halfExtents, nil)))
+    end
+
+    return total
+  end, numberDigest)
+end
+
+do
+  local size = 96
+  local navmesh = detour.buildPolyMeshNavMesh(gridMesh(size))
+  local first, last = 1, size * size
+  local start, finish = vector.create(0.25, 0, 0.25), vector.create(size - 0.25, 0, size - 0.25)
+
+  navmesh.walkableClimb = 0.5
+
+  workload('find a path across 9216 polygons', '191 polygons', function()
+    return detour.findPath(navmesh, first, last, nil)
+  end, function(path): string
+    return `{#path} polygons`
+  end)
+
+  workload('find a positioned path across 9216 polygons', '191 polygons', function()
+    return (detour.findPathPositioned(navmesh, first, last, start, finish, nil))
+  end, function(path): string
+    return `{#path} polygons`
+  end)
+
+  local corridor = detour.findPath(navmesh, first, last, nil)
+
+  workload('straighten a path of 191 polygons', '29 points', function()
+    return (detour.findStraightPath(navmesh, start, finish, corridor))
+  end, function(points): string
+    return `{#points} points`
+  end)
+end
+
+do
+  local agents, spacing = 256, 0.75
+  local side = math.ceil(math.sqrt(agents))
+  local extent = side * spacing + 4
+  local corners = {
+    vector.create(0, 0, 0),
+    vector.create(0, 0, extent),
+    vector.create(extent, 0, 0),
+    vector.create(extent, 0, extent),
+  }
+  local navmesh = detour.buildTriangleNavMesh(corners, { { 1, 2, 3 }, { 3, 2, 4 } })
+
+  workload('crowd of 256 agents, 10 updates', '3935.145404458046', function()
+    local crowd = crowds.new(navmesh, agents, {
+      separationWeight = 2,
+      separationRange = 3,
+      constrainToNavmesh = false,
+      maxAgentRadius = 0.25,
+    })
+
+    for agent = 0, agents - 1 do
+      local position = vector.create(agent % side * spacing + 2, 0, agent // side * spacing + 2)
+      local id = assert(crowds.addAgent(crowd, position, {
+        radius = 0.2,
+        height = 1.8,
+        maxSpeed = 2,
+        maxAcceleration = 8,
+        collisionQueryRange = 1.2,
+        updateFlags = crowds.DT_CROWD_SEPARATION,
+      }))
+
+      assert(crowds.requestMoveVelocity(crowd, id, vector.create(1.5, 0, 0.15 * (agent % 3 - 1))))
+    end
+
+    for _ = 1, 10 do
+      crowds.update(crowd, 1 / 60)
+    end
+
+    local checksum = 0
+
+    for agent = 1, agents do
+      local position = crowds.getAgent(crowd, agent).position
+
+      checksum += position.X + position.Z
+    end
+
+    return checksum
+  end, numberDigest)
+end
+
+do
+  local grid, tileSize = 8, 4
+
+  local function layer(tileX: number, tileY: number): buffer
+    local cells = tileSize * tileSize
+    local heights, areas, connections = buffer.create(cells), buffer.create(cells), buffer.create(cells)
+
+    buffer.fill(areas, 0, 63)
+
+    for row = 0, tileSize - 1 do
+      for column = 0, tileSize - 1 do
+        local connection = if column > 0 then 1 else 0x10
+
+        connection += if row < tileSize - 1 then 2 else 0x20
+        connection += if column < tileSize - 1 then 4 else 0x40
+        connection += if row > 0 then 8 else 0x80
+        buffer.writeu8(connections, column + row * tileSize, connection)
+      end
+    end
+
+    local origin = vector.create(tileX * tileSize, 0, tileY * tileSize)
+
+    return assert(tilecache.buildTileCacheLayer({
+      tx = tileX,
+      ty = tileY,
+      tlayer = 0,
+      bmin = origin,
+      bmax = origin + vector.create(tileSize, 1, tileSize),
+      hmin = 0,
+      hmax = 0,
+      width = tileSize,
+      height = tileSize,
+      minx = 0,
+      maxx = tileSize - 1,
+      miny = 0,
+      maxy = tileSize - 1,
+    }, heights, areas, connections))
+  end
+
+  workload('tile cache, 64 tiles under 8 obstacles', '64', function()
+    local cache = assert(tilecache.init({
+      orig = vector.zero,
+      cs = 1,
+      ch = 0.5,
+      width = tileSize,
+      height = tileSize,
+      walkableHeight = 1,
+      walkableRadius = 0,
+      walkableClimb = 0.5,
+      maxSimplificationError = 1.3,
+      maxTiles = grid * grid,
+      maxObstacles = grid,
+    }, { maxPolys = 64, meshProcess = tilecache.defaultMeshProcess, navMaxTiles = grid * grid }))
+
+    for tileY = 0, grid - 1 do
+      for tileX = 0, grid - 1 do
+        assert(tilecache.addTile(cache, layer(tileX, tileY), 0))
+      end
+    end
+
+    for row = 0, grid - 1 do
+      local low = vector.create(0.1, -1, row * tileSize + 0.1)
+
+      assert(tilecache.addBoxObstacle(cache, low, vector.create(grid * tileSize - 0.1, 2, row * tileSize + tileSize - 0.1)))
+    end
+
+    local updates = 0
+
+    while true do
+      local status, upToDate = tilecache.update(cache, 0)
+
+      assert(tilecache.statusSucceed(status))
+      updates += 1
+
+      if upToDate then break end
+    end
+
+    return updates
+  end, numberDigest)
+end
+
+do
+  local grid = 8
+
+  local function tile(tileX: number, tileZ: number)
+    local corners = {
+      vector.create(tileX, 0, tileZ),
+      vector.create(tileX, 0, tileZ + 1),
+      vector.create(tileX + 1, 0, tileZ),
+      vector.create(tileX + 1, 0, tileZ + 1),
+    }
+    local navmesh = detour.buildTriangleNavMesh(corners, { { 1, 2, 3 }, { 3, 2, 4 } })
+
+    navmesh.cellSize = 0.25
+
+    return navmesh
+  end
+
+  local function tiled()
+    local world = detour.newTiledNavMesh {
+      orig = vector.zero,
+      tileWidth = 1,
+      tileHeight = 1,
+      maxTiles = grid * grid,
+      maxPolys = 4,
+    }
+
+    for tileZ = 0, grid - 1 do
+      for tileX = 0, grid - 1 do
+        local _, status = detour.addTile(world, tile(tileX, tileZ), tileX, tileZ, 0)
+
+        assert(detour.statusSucceed(status))
+      end
+    end
+
+    return world
+  end
+
+  local world = tiled()
+  local reach = vector.create(0.3, 1, 0.3)
+  local first = detour.findNearestPoly(world, vector.create(0.1, 0, 0.1), reach, nil)
+  local last = detour.findNearestPoly(world, vector.create(grid - 0.1, 0, grid - 0.1), reach, nil)
+
+  workload('tiled navmesh, add 64 tiles', '128 polygons', tiled, function(built): string
+    return `{built.polyCount} polygons`
+  end)
+
+  workload('tiled navmesh, find a path across 64 tiles', '30 polygons', function()
+    return detour.findPath(world, first, last, nil)
+  end, function(path): string
+    return `{#path} polygons`
+  end)
+
+  workload('tiled navmesh, 10000 tile lookups', '315000', function()
+    local total = 0
+
+    for query = 1, 10000 do
+      local found = detour.getTileAt(world, query * 1103515245 % grid, query * 2654435761 % grid, 0)
+
+      if found then total += found.index end
+    end
+
+    return total
+  end, numberDigest)
+end
