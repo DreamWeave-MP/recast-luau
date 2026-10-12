@@ -254,7 +254,10 @@ local function buildBVTree(params: TreeParams): buffer
     end
   end
 
-  local function subdivide(first: number, count: number)
+  --- Writes the subtree over the `count` polygons of `order` from `first`. `sorted` is the axis
+  --- those polygons are already in order on, when the parent's sort was on it: a stable sort of
+  --- them on that axis again would move nothing.
+  local function subdivide(first: number, count: number, sorted: number?)
     local node = nodeCount
 
     nodeCount += 1
@@ -283,12 +286,12 @@ local function buildBVTree(params: TreeParams): buffer
 
     if extent.Z > longest then axis = 2 end
 
-    sort(first, count, axis * polygonCount * 4)
+    if axis ~= sorted then sort(first, count, axis * polygonCount * 4) end
 
     local half = count // 2
 
-    subdivide(first, half)
-    subdivide(first + half, count - half)
+    subdivide(first, half, axis)
+    subdivide(first + half, count - half, axis)
     writeBVNode(nodes, node, low, high, node - nodeCount)
   end
 
