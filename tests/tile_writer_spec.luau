@@ -127,7 +127,8 @@ end
 
 --- Gives a soup a detail mesh: each polygon's own vertices, then up to three samples. With
 --- `astray`, some samples sit below the tile's minimum, far past its maximum, exactly on its
---- minimum, or at an infinity: every one of those quantizes to an end of the u16 range.
+--- minimum, or at an infinity, and some polygons lie outside the tile altogether: every one of
+--- those quantizes to an end of the u16 range.
 local function withDetail(mesh: Mesh, seed: number, astray: boolean): Mesh
   local pick = generator(seed)
   local meshes = buffer.create(mesh.polyCount * 16)
@@ -179,6 +180,18 @@ local function withDetail(mesh: Mesh, seed: number, astray: boolean): Mesh
         buffer.writef32(verts, offset + 8, -math.huge)
       elseif stray == 5 then
         buffer.writef32(verts, offset + 4, mesh.bmin.Y)
+      end
+    end
+
+    -- A whole polygon adrift: all of it past the tile's far side, or all of it short of the near
+    -- one, so its minimum clamps at the top of the range or its maximum at the bottom.
+    local adrift = if astray then pick(8) else -1
+
+    if adrift == 0 or adrift == 1 then
+      for vertex = vertexCount, vertexCount + corners + samples - 1 do
+        local offset = vertex * 12 + (if adrift == 0 then 0 else 8)
+
+        buffer.writef32(verts, offset, if adrift == 0 then 1e9 + vertex else mesh.bmin.Z - 2 - vertex % 3)
       end
     end
 
@@ -268,11 +281,11 @@ end)
 
 suite.it('clamps BV bounds from detail vertices that leave the tile', function()
   local expected = {
-    { seed = 0x1f83d9ab, polygons = 9, corners = 6, want = 'a2ff0960646f4c54641a6e5ea92eb3835e84188339391696160eecb58fccec43' },
-    { seed = 0x1f83d9ac, polygons = 17, corners = 4, want = 'ce7728682ef5fc141b94d010631b3e3610b89cba425e37902725949b1493b7c0' },
-    { seed = 0x1f83d9ad, polygons = 33, corners = 6, want = 'a9ca176e412153095ebcf18d20972f1e7dbaf987f7626ac76bdddca99c39d5d9' },
-    { seed = 0x1f83d9ae, polygons = 500, corners = 6, want = '17d517454f0a422b1cc067f2c2a91995f83a7a6e15a7535ef3bd06b6a0fb5b58' },
-    { seed = 0x1f83d9af, polygons = 2000, corners = 5, want = 'bcaf0217097caa3cef3405441ca783cfd62f0f5c111026df677a168f31c03ac3' },
+    { seed = 0x1f83d9ab, polygons = 9, corners = 6, want = '244b8b4355fd273ac309ae512465e6526b2bdf88af66f3357306099f55b200c1' },
+    { seed = 0x1f83d9ac, polygons = 17, corners = 4, want = 'bd22632f2bf5e6a7778a9ca2a29c31e9b456b145c5221fdd49cf1ace424065a2' },
+    { seed = 0x1f83d9ad, polygons = 33, corners = 6, want = '436af7846a25aa420559ec1f1f51f69227a4422115cccddc75c4275cf95cd22c' },
+    { seed = 0x1f83d9ae, polygons = 500, corners = 6, want = '94794c8364b8b00aba161650c4ea7bcc1b55cd57ce271d90997040beaae220aa' },
+    { seed = 0x1f83d9af, polygons = 2000, corners = 5, want = '8bf4af57bb4b460c4c3927001c57c38a6572f1842491cd203705438d0bae4767' },
   }
 
   for _, case in expected do
