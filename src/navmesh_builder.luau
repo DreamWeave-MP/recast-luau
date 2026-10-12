@@ -123,59 +123,63 @@ type TreeParams = {
 --- Each polygon's quantized bounds, and its minimum again as three f32 columns (X, then Y, then
 --- Z, each `polyCount` elements) for the sorts to read as keys.
 local function quantizedBounds(params: TreeParams): ({ vector }, { vector }, buffer)
-  local polygonCount = params.polyCount
+  local polygonCount, vertsPerPolygon = params.polyCount, params.nvp
+  local verts, polys = params.verts, params.polys
+  local detailMeshes, detailVerts = params.detailMeshes, params.detailVerts
+  local originX, originY, originZ = params.bmin.X, params.bmin.Y, params.bmin.Z
+  local cellSize, cellHeight = params.cs, params.ch
   local mins: { vector }, maxs: { vector } = table.create(polygonCount), table.create(polygonCount)
   local keys = buffer.create(polygonCount * 12)
-  local quantization = 1 / params.cs
+  local quantization = 1 / cellSize
 
   for polygon = 0, polygonCount - 1 do
     local minX, minY, minZ, maxX, maxY, maxZ
 
-    if params.detailMeshes then
+    if detailMeshes then
       local mesh = polygon * 16
-      local firstVertex = buffer.readu32(params.detailMeshes, mesh)
-      local vertexCount = buffer.readu32(params.detailMeshes, mesh + 4)
-      local vertex = readF32Vec3(params.detailVerts, firstVertex * 12)
+      local firstVertex = buffer.readu32(detailMeshes, mesh)
+      local vertexCount = buffer.readu32(detailMeshes, mesh + 4)
+      local vertex = readF32Vec3(detailVerts, firstVertex * 12)
       local lowX, lowY, lowZ = vertex.X, vertex.Y, vertex.Z
       local highX, highY, highZ = lowX, lowY, lowZ
 
       for sample = 1, vertexCount - 1 do
-        vertex = readF32Vec3(params.detailVerts, (firstVertex + sample) * 12)
+        vertex = readF32Vec3(detailVerts, (firstVertex + sample) * 12)
         lowX, lowY, lowZ = math.min(lowX, vertex.X), math.min(lowY, vertex.Y), math.min(lowZ, vertex.Z)
         highX, highY, highZ = math.max(highX, vertex.X), math.max(highY, vertex.Y), math.max(highZ, vertex.Z)
       end
 
-      minX = clampi(math.floor((lowX - params.bmin.X) * quantization), 0, 0xffff)
-      minY = clampi(math.floor((lowY - params.bmin.Y) * quantization), 0, 0xffff)
-      minZ = clampi(math.floor((lowZ - params.bmin.Z) * quantization), 0, 0xffff)
-      maxX = clampi(math.floor((highX - params.bmin.X) * quantization), 0, 0xffff)
-      maxY = clampi(math.floor((highY - params.bmin.Y) * quantization), 0, 0xffff)
-      maxZ = clampi(math.floor((highZ - params.bmin.Z) * quantization), 0, 0xffff)
+      minX = clampi(math.floor((lowX - originX) * quantization), 0, 0xffff)
+      minY = clampi(math.floor((lowY - originY) * quantization), 0, 0xffff)
+      minZ = clampi(math.floor((lowZ - originZ) * quantization), 0, 0xffff)
+      maxX = clampi(math.floor((highX - originX) * quantization), 0, 0xffff)
+      maxY = clampi(math.floor((highY - originY) * quantization), 0, 0xffff)
+      maxZ = clampi(math.floor((highZ - originZ) * quantization), 0, 0xffff)
     else
-      local corners = polygon * params.nvp * 4
-      local vertex = buffer.readu16(params.polys, corners) * 6
+      local corners = polygon * vertsPerPolygon * 4
+      local vertex = buffer.readu16(polys, corners) * 6
 
-      minX = buffer.readu16(params.verts, vertex)
-      minY = buffer.readu16(params.verts, vertex + 2)
-      minZ = buffer.readu16(params.verts, vertex + 4)
+      minX = buffer.readu16(verts, vertex)
+      minY = buffer.readu16(verts, vertex + 2)
+      minZ = buffer.readu16(verts, vertex + 4)
       maxX, maxY, maxZ = minX, minY, minZ
 
-      for corner = 1, params.nvp - 1 do
-        local index = buffer.readu16(params.polys, corners + corner * 2)
+      for corner = 1, vertsPerPolygon - 1 do
+        local index = buffer.readu16(polys, corners + corner * 2)
 
         if index == MESH_NULL_IDX then break end
 
         vertex = index * 6
 
-        local cellX, cellY = buffer.readu16(params.verts, vertex), buffer.readu16(params.verts, vertex + 2)
-        local cellZ = buffer.readu16(params.verts, vertex + 4)
+        local cellX, cellY = buffer.readu16(verts, vertex), buffer.readu16(verts, vertex + 2)
+        local cellZ = buffer.readu16(verts, vertex + 4)
 
         minX, minY, minZ = math.min(minX, cellX), math.min(minY, cellY), math.min(minZ, cellZ)
         maxX, maxY, maxZ = math.max(maxX, cellX), math.max(maxY, cellY), math.max(maxZ, cellZ)
       end
 
-      minY = math.floor(minY * params.ch / params.cs)
-      maxY = math.ceil(maxY * params.ch / params.cs)
+      minY = math.floor(minY * cellHeight / cellSize)
+      maxY = math.ceil(maxY * cellHeight / cellSize)
     end
 
     mins[polygon + 1] = vector.create(minX, minY, minZ)
