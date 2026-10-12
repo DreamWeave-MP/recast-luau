@@ -19,7 +19,7 @@ local function readVec3f(source, index1)
     local o = (index1 - 1) * 12
     return vector.create(buffer.readf32(source,o), buffer.readf32(source,o+4), buffer.readf32(source,o+8))
 end
-local function writeVec3f(target, index1, v)
+local function writeVec3f(target, index1, v: vector)
     local o = (index1 - 1) * 12
     buffer.writef32(target,o,v.X); buffer.writef32(target,o+4,v.Y); buffer.writef32(target,o+8,v.Z)
 end
@@ -297,7 +297,7 @@ local function isWalkable(nav, tri0)
     return tri0 >= 0 and tri0 < nav.polyCount and (nav.polyValid == nil or buffer.readu8(nav.polyValid, tri0) ~= 0)
 end
 
-local function vertexKey(v)
+local function vertexKey(v: vector)
     -- Float32 values have a stable textual spelling here because source vertices are packed before
     -- welding. The fallback weld lets importer-produced meshes connect even when they duplicate
     -- vertices on material/UV seams.
@@ -334,7 +334,7 @@ local function buildPolyBounds(nav)
     return bounds
 end
 
-local function boundsOverlap(nav, poly0, qmin, qmax)
+local function boundsOverlap(nav, poly0, qmin: vector, qmax: vector)
     local bounds = nav.polyBounds
     if bounds == nil then bounds = buildPolyBounds(nav) end
     local o = poly0 * 24
@@ -405,7 +405,7 @@ local function buildBVTree(nav, cellSize)
 
     local nodes = buffer.create(math.max(1, groundCount * 2) * BV_NODE_BYTES)
     local curNode = 0
-    local function subdivide(imin, imax, bmin, bmax) -- 1-based, inclusive-exclusive
+    local function subdivide(imin, imax, bmin: vector, bmax: vector) -- 1-based, inclusive-exclusive
         local inum = imax - imin
         local icur = curNode
         curNode += 1
@@ -540,7 +540,7 @@ function Detour.buildTriangleNavMesh(vertices, triangles, options)
     return nav
 end
 
-local function closestPointOnTriangle(p, a, b, c)
+local function closestPointOnTriangle(p: vector, a: vector, b: vector, c: vector)
     -- Real-Time Collision Detection region tests, kept branchy on purpose: it avoids temporary
     -- tables and gives exact edge/vertex clamping for nearest-poly queries.
     local ab = b - a
@@ -584,7 +584,7 @@ local function closestPointOnTriangle(p, a, b, c)
     return a + ab * v + ac * w
 end
 
-local function closestPointSeg2D(p, a, b)
+local function closestPointSeg2D(p: vector, a: vector, b: vector)
     local dx, dz = b.X - a.X, b.Z - a.Z
     local denom = dx * dx + dz * dz
     local t = 0
@@ -622,7 +622,7 @@ local function closestPointOnDetailEdges(nav, poly0, position, onlyBoundary)
     return best
 end
 
-local function pointInPolyXZ(nav, poly0, p)
+local function pointInPolyXZ(nav, poly0, p: vector)
     local inside = false
     local nv = polyVertCount(nav, poly0)
     local j = nv - 1
@@ -638,7 +638,7 @@ local function pointInPolyXZ(nav, poly0, p)
     return inside
 end
 
-local function heightOnTriangleXZ(p, a, b, c)
+local function heightOnTriangleXZ(p: vector, a: vector, b: vector, c: vector)
     local v0x, v0z = b.X - a.X, b.Z - a.Z
     local v1x, v1z = c.X - a.X, c.Z - a.Z
     local v2x, v2z = p.X - a.X, p.Z - a.Z
@@ -651,14 +651,14 @@ local function heightOnTriangleXZ(p, a, b, c)
     return a.Y * u + b.Y * v + c.Y * w
 end
 
-local function extentAllows(extents, p, closest)
+local function extentAllows(extents, p: vector, closest: vector)
     if extents == nil then return true end
     return math.abs(closest.X - p.X) <= extents.X
        and math.abs(closest.Y - p.Y) <= extents.Y
        and math.abs(closest.Z - p.Z) <= extents.Z
 end
 
-function Detour.closestPointOnPoly(nav, ref, position)
+function Detour.closestPointOnPoly(nav, ref, position: vector)
     -- dtNavMesh stores detail meshes per tile, not in the aggregate ref/index view.  Resolve tiled
     -- refs back to their owning tile so serialized dtPolyDetail data remains authoritative.
     if nav._tiled then
@@ -819,7 +819,7 @@ function Detour.queryPolygons(nav, center, halfExtents, filter)
     return out
 end
 
-local function nearestCandidate(nav, position, extents, tri0, bestRef, bestPoint, bestDistance, filter)
+local function nearestCandidate(nav, position: vector, extents, tri0, bestRef, bestPoint, bestDistance, filter)
     if tri0 < 0 or tri0 >= nav.polyCount then return bestRef, bestPoint, bestDistance end
     if filter == nil then
         if not isWalkable(nav, tri0) then return bestRef, bestPoint, bestDistance end
@@ -853,7 +853,7 @@ local function nearestCandidate(nav, position, extents, tri0, bestRef, bestPoint
     return bestRef, bestPoint, bestDistance
 end
 
-local function nearestCompact(nav, position, extents, filter)
+local function nearestCompact(nav, position: vector, extents, filter)
     local chf = nav.compact
     local map = nav.spanToBase
     local bestRef, bestPoint, bestDistance = nil, nil, math.huge
@@ -1285,7 +1285,7 @@ function Detour.getPolyWallSegments(nav, ref, filter, includePortals)
 end
 
 
-local function intersectSegments2D(p, q, a, b)
+local function intersectSegments2D(p: vector, q: vector, a: vector, b: vector)
     local rx, rz = q.X - p.X, q.Z - p.Z
     local sx, sz = b.X - a.X, b.Z - a.Z
     local denom = rx * sz - rz * sx
@@ -1297,7 +1297,7 @@ local function intersectSegments2D(p, q, a, b)
     return t, u
 end
 
-local function inwardEdgeNormal(nav, poly0, edge0, a, b)
+local function inwardEdgeNormal(nav, poly0, edge0, a: vector, b: vector)
     local ex, ez = b.X - a.X, b.Z - a.Z
     local len = math.sqrt(ex * ex + ez * ez)
     if len <= 1e-8 then return vector.zero end
@@ -1677,7 +1677,7 @@ function Detour.findPathPositioned(nav,startRef,endRef,startPos,endPos,filter,ma
     return path,status
 end
 
-local function pointInVertexPolyXZ(vertices, p)
+local function pointInVertexPolyXZ(vertices, p: vector)
     local inside = false
     local j = #vertices
     for i = 1, #vertices do
@@ -1784,7 +1784,7 @@ function Detour.findLocalNeighbourhood(nav, startRef, centerPos, radius, filter)
     return result.refs, result.parents
 end
 
-function Detour.moveAlongSurface(nav, startRef, startPos, endPos, filter)
+function Detour.moveAlongSurface(nav, startRef, startPos: vector, endPos: vector, filter)
     if not Detour.isValidPolyRef(nav, startRef, filter) then return nil, nil end
     local start0 = refToPoly0(nav,startRef)
     local queue, head = {start0}, 1
@@ -1877,7 +1877,7 @@ function Detour.findDistanceToWall(nav, startRef, centerPos, maxRadius, filter)
 end
 
 
-local function dtTriArea2D(a, b, c)
+local function dtTriArea2D(a: vector, b: vector, c: vector)
     local abx, abz = b.X - a.X, b.Z - a.Z
     local acx, acz = c.X - a.X, c.Z - a.Z
     return acx * abz - abx * acz
@@ -2056,7 +2056,7 @@ function NavMeshQuery:isInClosedList(ref)
         or (self._lastDijkstra~=nil and self._lastDijkstra.closed[poly0]==true)
 end
 
-local function appendStraightVertex(points, flags, refs, point, flag, ref)
+local function appendStraightVertex(points: { vector }, flags, refs, point: vector, flag, ref)
     if #points == 0 or not Common.vequal2D(points[#points], point, 1e-5) or math.abs(points[#points].Y - point.Y) > 1e-5 then
         points[#points + 1] = point
         flags[#flags + 1] = flag or 0
@@ -2729,7 +2729,7 @@ function Detour.newTiledNavMesh(params)
     }
 end
 
-function Detour.calcTileLoc(nav,pos)
+function Detour.calcTileLoc(nav,pos: vector)
     if not nav._tiled then return 0,0 end
     return math.floor((pos.X-nav.orig.X)/nav.tileWidth),math.floor((pos.Z-nav.orig.Z)/nav.tileHeight)
 end
@@ -2971,11 +2971,11 @@ local function attachTiledBoundaryEdge(nav,tile,poly0,localEdge,a,b)
 end
 
 
-local function tiledPortalLong(dir0,v)
+local function tiledPortalLong(dir0,v: vector)
     return if dir0==0 or dir0==2 then v.Z else v.X
 end
 
-local function tiledPortalSlabCoord(dir0,v)
+local function tiledPortalSlabCoord(dir0,v: vector)
     return if dir0==0 or dir0==2 then v.X else v.Z
 end
 
@@ -2991,7 +2991,7 @@ local function tiledPortalBucketKey(x,y,dir0)
     return tostring(x)..'|'..tostring(y)..'|'..tostring(dir0)
 end
 
-local function tiledPortalYAt(dir0,a,b,q)
+local function tiledPortalYAt(dir0,a: vector,b: vector,q)
     local aa,bb=tiledPortalLong(dir0,a),tiledPortalLong(dir0,b)
     local d=bb-aa
     if math.abs(d)<1e-6 then return (a.Y+b.Y)*0.5 end

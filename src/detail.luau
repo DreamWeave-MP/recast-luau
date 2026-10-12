@@ -4,7 +4,7 @@
 -- Uses packed buffers at the public boundary and compact tables/vectors for transient triangulation.
 
 local Common = require('@recast/common')
-local function writeVec3f(target, index1, v)
+local function writeVec3f(target, index1, v: vector)
     local o = (index1 - 1) * 12
     buffer.writef32(target,o,v.X); buffer.writef32(target,o+4,v.Y); buffer.writef32(target,o+8,v.Z)
 end
@@ -58,10 +58,10 @@ end
 
 
 
-local function vdot2(a,b) return a.X*b.X + a.Z*b.Z end
-local function vdistSq2(a,b) local dx,dz=b.X-a.X,b.Z-a.Z; return dx*dx+dz*dz end
+local function vdot2(a: vector,b: vector) return a.X*b.X + a.Z*b.Z end
+local function vdistSq2(a: vector,b: vector) local dx,dz=b.X-a.X,b.Z-a.Z; return dx*dx+dz*dz end
 local function vdist2(a,b) return math.sqrt(vdistSq2(a,b)) end
-local function vcross2(a,b,c) return (b.X-a.X)*(c.Z-a.Z)-(b.Z-a.Z)*(c.X-a.X) end
+local function vcross2(a: vector,b: vector,c: vector) return (b.X-a.X)*(c.Z-a.Z)-(b.Z-a.Z)*(c.X-a.X) end
 
 local function circumCircle(p1,p2,p3)
     local v2,v3=p2-p1,p3-p1
@@ -148,7 +148,7 @@ local function distancePtSeg(pt,p,q)
     return vector.dot(delta,delta)
 end
 
-local function distancePtSeg2d(pt,p,q)
+local function distancePtSeg2d(pt: vector,p: vector,q: vector)
     local pqx,pqz=q.X-p.X,q.Z-p.Z; local dx,dz=pt.X-p.X,pt.Z-p.Z
     local d=pqx*pqx+pqz*pqz; local t=pqx*dx+pqz*dz
     if d>0 then t/=d end; t=math.clamp(t,0,1)
@@ -156,7 +156,7 @@ local function distancePtSeg2d(pt,p,q)
     return dx*dx+dz*dz
 end
 
-local function distToPoly(verts,p)
+local function distToPoly(verts,p: vector)
     local dmin=math.huge; local inside=false; local j=#verts
     for i=1,#verts do
         local vi,vj=verts[i],verts[j]

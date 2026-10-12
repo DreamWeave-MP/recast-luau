@@ -8,7 +8,7 @@ local Boundary = {}
 Boundary.MAX_LOCAL_SEGS = 8
 Boundary.MAX_LOCAL_POLYS = 16
 
-local function distancePtSegSqr2D(p, a, b)
+local function distancePtSegSqr2D(p: vector, a: vector, b: vector)
     local dx, dz = b.X-a.X, b.Z-a.Z
     local d = dx*dx+dz*dz
     local t = 0

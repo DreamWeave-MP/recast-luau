@@ -40,7 +40,7 @@ local function readVec(b, id)
     return vector.create(buffer.readf32(b,o), buffer.readf32(b,o+4), buffer.readf32(b,o+8))
 end
 
-local function writeVec(b, id, v)
+local function writeVec(b, id, v: vector)
     local o = (id - 1) * 12
     buffer.writef32(b,o,v.X); buffer.writef32(b,o+4,v.Y); buffer.writef32(b,o+8,v.Z)
 end

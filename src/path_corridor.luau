@@ -100,7 +100,7 @@ function Corridor.findCorners(c,nav,filter,maxCorners)
     return outP,outF,outR
 end
 
-function Corridor.optimizePathVisibility(c,nextPos,pathOptimizationRange,nav,filter)
+function Corridor.optimizePathVisibility(c,nextPos: vector,pathOptimizationRange,nav,filter)
     if #c.path==0 then return false end
     local dx,dz=nextPos.X-c.position.X,nextPos.Z-c.position.Z
     local originalDist=math.sqrt(dx*dx+dz*dz)

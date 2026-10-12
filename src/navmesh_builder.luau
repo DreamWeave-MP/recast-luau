@@ -67,7 +67,7 @@ local function vecFrom(value, fallback)
     return value
 end
 
-local function classifyOffMeshPoint(p, bmin, bmax)
+local function classifyOffMeshPoint(p: vector, bmin: vector, bmax: vector)
     local outcode = 0
     if p.X >= bmax.X then outcode = bit32.bor(outcode, 1) end
     if p.Z >= bmax.Z then outcode = bit32.bor(outcode, 2) end
@@ -88,7 +88,7 @@ local function readF32Vec3(data, o)
     return vector.create(buffer.readf32(data, o), buffer.readf32(data, o + 4), buffer.readf32(data, o + 8))
 end
 
-local function writeF32Vec3(data, o, v)
+local function writeF32Vec3(data, o, v: vector)
     buffer.writef32(data, o, v.X)
     buffer.writef32(data, o + 4, v.Y)
     buffer.writef32(data, o + 8, v.Z)

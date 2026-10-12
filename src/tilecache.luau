@@ -370,11 +370,11 @@ function TileCache.calcTightTileBounds(cache, header)
         vector.create(header.bmin.X + (header.maxx + 1) * cs, header.bmax.Y, header.bmin.Z + (header.maxy + 1) * cs)
 end
 
-local function overlapBounds(amin, amax, bmin, bmax)
+local function overlapBounds(amin: vector, amax: vector, bmin: vector, bmax: vector)
     return amin.X <= bmax.X and amax.X >= bmin.X and amin.Y <= bmax.Y and amax.Y >= bmin.Y and amin.Z <= bmax.Z and amax.Z >= bmin.Z
 end
 
-function TileCache.queryTiles(cache, bmin, bmax, maxResults)
+function TileCache.queryTiles(cache, bmin: vector, bmax: vector, maxResults)
     if cache.params == nil or cache.tiles == nil then return {}, bit32.bor(TileCache.DT_FAILURE, TileCache.DT_INVALID_PARAM) end
     maxResults = maxResults or math.huge
     local p = cache.params
@@ -661,7 +661,7 @@ function TileCache.layerFromHeightfieldLayer(layer, tx, ty, tlayer, compressor)
     return TileCache.buildTileCacheLayer(header, layer.heights, layer.areas, layer.cons, compressor)
 end
 
-local function markLayerCylinder(layer, cs, ch, pos, radius, height, areaId)
+local function markLayerCylinder(layer, cs, ch, pos: vector, radius, height, areaId)
     local header = layer.header
     local orig, w, h = header.bmin, header.width, header.height
     local ics, ich = 1 / cs, 1 / ch
@@ -688,7 +688,7 @@ local function markLayerCylinder(layer, cs, ch, pos, radius, height, areaId)
     return TileCache.DT_SUCCESS
 end
 
-local function markLayerBox(layer, cs, ch, bmin, bmax, areaId)
+local function markLayerBox(layer, cs, ch, bmin: vector, bmax: vector, areaId)
     local header=layer.header; local orig,w,h=header.bmin,header.width,header.height
     local ics,ich=1/cs,1/ch
     local minx,maxx=math.floor((bmin.X-orig.X)*ics),math.floor((bmax.X-orig.X)*ics)
@@ -703,7 +703,7 @@ local function markLayerBox(layer, cs, ch, bmin, bmax, areaId)
     return TileCache.DT_SUCCESS
 end
 
-local function markLayerOrientedBox(layer, cs, ch, center, halfExtents, rotAux0, rotAux1, areaId)
+local function markLayerOrientedBox(layer, cs, ch, center: vector, halfExtents: vector, rotAux0, rotAux1, areaId)
     local header=layer.header; local orig,w,h=header.bmin,header.width,header.height
     local ics,ich=1/cs,1/ch
     local cx,cz=(center.X-orig.X)*ics,(center.Z-orig.Z)*ics

@@ -131,7 +131,7 @@ function NavMesh.decodePolyIdPoly(nav, ref)
     return ref % pow2(nav.polyBits)
 end
 
-function NavMesh.calcTileLoc(nav, pos)
+function NavMesh.calcTileLoc(nav, pos: vector)
     if nav.tileWidth == 0 or nav.tileHeight == 0 then return 0, 0 end
     return math.floor((pos.X - nav.orig.X) / nav.tileWidth), math.floor((pos.Z - nav.orig.Z) / nav.tileHeight)
 end

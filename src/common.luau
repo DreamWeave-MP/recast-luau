@@ -31,24 +31,24 @@ function Common.vec(x, y, z)
     return vector.create(x, y, z)
 end
 
-function Common.distanceSquared(a, b)
+function Common.distanceSquared(a: vector, b: vector)
     local dx = a.X - b.X
     local dy = a.Y - b.Y
     local dz = a.Z - b.Z
     return dx * dx + dy * dy + dz * dz
 end
 
-function Common.distanceSquared2D(a, b)
+function Common.distanceSquared2D(a: vector, b: vector)
     local dx = a.X - b.X
     local dz = a.Z - b.Z
     return dx * dx + dz * dz
 end
 
-function Common.triArea2D(a, b, c)
+function Common.triArea2D(a: vector, b: vector, c: vector)
     return (b.X - a.X) * (c.Z - a.Z) - (c.X - a.X) * (b.Z - a.Z)
 end
 
-function Common.vequal2D(a, b, eps)
+function Common.vequal2D(a: vector, b: vector, eps)
     eps = eps or 1e-5
     local dx = a.X - b.X
     local dz = a.Z - b.Z
@@ -68,7 +68,7 @@ function Common.readVec3f(b, index)
     return vector.create(buffer.readf32(b, o), buffer.readf32(b, o + 4), buffer.readf32(b, o + 8))
 end
 
-function Common.writeVec3f(b, index, v)
+function Common.writeVec3f(b, index, v: vector)
     local o = (index - 1) * 12
     buffer.writef32(b, o, v.X)
     buffer.writef32(b, o + 4, v.Y)

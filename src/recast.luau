@@ -13,7 +13,7 @@ local function triangleAt(triangles, tri0)
     local o = tri0 * 12
     return buffer.readu32(triangles,o), buffer.readu32(triangles,o+4), buffer.readu32(triangles,o+8)
 end
-local function writeVec3f(target, index1, v)
+local function writeVec3f(target, index1, v: vector)
     local o = (index1 - 1) * 12
     buffer.writef32(target,o,v.X); buffer.writef32(target,o+4,v.Y); buffer.writef32(target,o+8,v.Z)
 end
@@ -53,7 +53,7 @@ local function trunc(v)
     return if v < 0 then math.ceil(v) else math.floor(v)
 end
 
-local function component(v, axis)
+local function component(v: vector, axis)
     if axis == 0 then return v.X end
     if axis == 1 then return v.Y end
     return v.Z
@@ -63,7 +63,7 @@ local function lerpVec(a, b, t)
     return a + (b - a) * t
 end
 
-local function overlapBounds(amin, amax, bmin, bmax)
+local function overlapBounds(amin: vector, amax: vector, bmin: vector, bmax: vector)
     return not (
         amin.X > bmax.X or amax.X < bmin.X
         or amin.Y > bmax.Y or amax.Y < bmin.Y
@@ -154,7 +154,7 @@ function Recast.calcBounds(vertices)
     return vector.create(minx, miny, minz), vector.create(maxx, maxy, maxz)
 end
 
-function Recast.calcGridSize(bmin, bmax, cellSize)
+function Recast.calcGridSize(bmin: vector, bmax: vector, cellSize)
     return trunc((bmax.X - bmin.X) / cellSize + 0.5), trunc((bmax.Z - bmin.Z) / cellSize + 0.5)
 end
 
@@ -247,7 +247,7 @@ function Recast.getSpans(hf, x, z)
     return out
 end
 
-local function dividePolyX(input, inputCount, out1, out2, axisOffset)
+local function dividePolyX(input: { vector }, inputCount, out1, out2, axisOffset)
     local n1, n2 = 0, 0
     local b = inputCount
     local db = axisOffset - input[b].X
@@ -273,7 +273,7 @@ local function dividePolyX(input, inputCount, out1, out2, axisOffset)
     return n1, n2
 end
 
-local function dividePolyZ(input, inputCount, out1, out2, axisOffset)
+local function dividePolyZ(input: { vector }, inputCount, out1, out2, axisOffset)
     local n1, n2 = 0, 0
     local b = inputCount
     local db = axisOffset - input[b].Z
@@ -306,7 +306,7 @@ local function newRasterScratch()
     }
 end
 
-local function rasterizeTri(v0, v1, v2, area, hf, flagMergeThreshold, scratch)
+local function rasterizeTri(v0: vector, v1: vector, v2: vector, area, hf, flagMergeThreshold, scratch)
     local triMin = vector.create(
         math.min(v0.X, v1.X, v2.X),
         math.min(v0.Y, v1.Y, v2.Y),
@@ -892,7 +892,7 @@ function Recast.medianFilterWalkableArea(chf)
     return true
 end
 
-function Recast.markBoxArea(boxMin, boxMax, areaId, chf)
+function Recast.markBoxArea(boxMin: vector, boxMax: vector, areaId, chf)
     local minX = truncTowardZero((boxMin.X - chf.bmin.X) / chf.cs)
     local minY = truncTowardZero((boxMin.Y - chf.bmin.Y) / chf.ch)
     local minZ = truncTowardZero((boxMin.Z - chf.bmin.Z) / chf.cs)
@@ -921,7 +921,7 @@ function Recast.markBoxArea(boxMin, boxMax, areaId, chf)
     return chf
 end
 
-local function pointInPolyXZ(vertices, point)
+local function pointInPolyXZ(vertices, point: vector)
     local inside = false
     local n = #vertices
     local j = n
@@ -984,7 +984,7 @@ function Recast.markConvexPolyArea(vertices, minYWorld, maxYWorld, areaId, chf)
     return chf
 end
 
-function Recast.markCylinderArea(position, radius, height, areaId, chf)
+function Recast.markCylinderArea(position: vector, radius, height, areaId, chf)
     local minX = truncTowardZero((position.X - radius - chf.bmin.X) / chf.cs)
     local minY = truncTowardZero((position.Y - chf.bmin.Y) / chf.ch)
     local minZ = truncTowardZero((position.Z - radius - chf.bmin.Z) / chf.cs)

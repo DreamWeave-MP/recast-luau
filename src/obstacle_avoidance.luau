@@ -8,24 +8,24 @@ local Avoidance = {}
 Avoidance.DT_MAX_PATTERN_DIVS = 32
 Avoidance.DT_MAX_PATTERN_RINGS = 4
 
-local function dot2(a, b) return a.X*b.X + a.Z*b.Z end
-local function dist2D(a, b)
+local function dot2(a: vector, b: vector) return a.X*b.X + a.Z*b.Z end
+local function dist2D(a: vector, b: vector)
     local dx, dz = a.X-b.X, a.Z-b.Z
     return math.sqrt(dx*dx + dz*dz)
 end
-local function normalize2(v)
+local function normalize2(v: vector)
     local d = math.sqrt(v.X*v.X + v.Z*v.Z)
     if d <= 1e-12 then return vector.zero end
     return vector.create(v.X/d, 0, v.Z/d)
 end
-local function triArea2D(a, b, c)
+local function triArea2D(a: vector, b: vector, c: vector)
     local abx, abz = b.X-a.X, b.Z-a.Z
     local acx, acz = c.X-a.X, c.Z-a.Z
     -- Detour's dtTriArea2D uses the opposite sign from the conventional xz cross product:
     -- ac.x * ab.z - ab.x * ac.z.  The sign selects the preferred RVO side.
     return acx*abz - abx*acz
 end
-local function closestPtSeg2DSqr(p, a, b)
+local function closestPtSeg2DSqr(p: vector, a: vector, b: vector)
     local dx, dz = b.X-a.X, b.Z-a.Z
     local d = dx*dx+dz*dz
     local t = 0
@@ -35,7 +35,7 @@ local function closestPtSeg2DSqr(p, a, b)
     return ex*ex+ez*ez, t
 end
 
-local function sweepCircleCircle(c0, r0, v, c1, r1)
+local function sweepCircleCircle(c0: vector, r0, v: vector, c1: vector, r1)
     local sx, sz = c1.X-c0.X, c1.Z-c0.Z
     local r = r0+r1
     local c = sx*sx+sz*sz-r*r
@@ -49,7 +49,7 @@ local function sweepCircleCircle(c0, r0, v, c1, r1)
     return (b-rd)*inv, (b+rd)*inv
 end
 
-local function isectRaySeg(ap, u, bp, bq)
+local function isectRaySeg(ap: vector, u: vector, bp: vector, bq: vector)
     local vx, vz = bq.X-bp.X, bq.Z-bp.Z
     local wx, wz = ap.X-bp.X, ap.Z-bp.Z
     local d = u.X*vz-u.Z*vx
@@ -208,7 +208,7 @@ local function processSample(query,vcand,cs,pos,rad,vel,dvel,minPenalty,params,i
     return penalty
 end
 
-function Avoidance.sampleVelocityGrid(query,pos,rad,vmax,vel,dvel,params,debug)
+function Avoidance.sampleVelocityGrid(query,pos,rad,vmax,vel,dvel: vector,params,debug)
     params=params or Avoidance.defaultParams(); prepare(query,pos,dvel)
     local invHorizTime=1/params.horizTime
     local invVmax=if vmax>0 then 1/vmax else math.huge
@@ -230,12 +230,12 @@ function Avoidance.sampleVelocityGrid(query,pos,rad,vmax,vel,dvel,params,debug)
     return best,ns
 end
 
-local function rotate2(v,ang)
+local function rotate2(v: vector,ang)
     local c,s=math.cos(ang),math.sin(ang)
     return vector.create(v.X*c-v.Z*s,0,v.X*s+v.Z*c)
 end
 
-function Avoidance.sampleVelocityAdaptive(query,pos,rad,vmax,vel,dvel,params,debug)
+function Avoidance.sampleVelocityAdaptive(query,pos,rad,vmax,vel,dvel: vector,params,debug)
     params=params or Avoidance.defaultParams(); prepare(query,pos,dvel)
     local invHorizTime=1/params.horizTime
     local invVmax=if vmax>0 then 1/vmax else math.huge
