@@ -20,6 +20,8 @@ local EV_HULL = -2
 local MAX_VERTS = 127
 local MAX_TRIS = 255
 local MAX_VERTS_PER_EDGE = 32
+-- How far inside or outside a circumcircle a point may sit and still count as on it.
+local CircleTolerance = 0.001
 local DIR_X = {-1, 0, 1, 0}
 local DIR_Z = {0, 1, 0, -1}
 
@@ -73,17 +75,70 @@ local function circumCircle(p1,p2,p3)
     return c,vdist2(c,p1),true
 end
 
-local function distPtTri(p,a,b,c)
-    local v0,v1,v2=c-a,b-a,p-a
-    local dot00,dot01,dot02=vdot2(v0,v0),vdot2(v0,v1),vdot2(v0,v2)
-    local dot11,dot12=vdot2(v1,v1),vdot2(v1,v2)
-    local denom=dot00*dot11-dot01*dot01
-    if math.abs(denom)<1e-12 then return math.huge end
-    local inv=1/denom
-    local u=(dot11*dot02-dot01*dot12)*inv
-    local v=(dot00*dot12-dot01*dot02)*inv
-    if u>=-1e-4 and v>=-1e-4 and u+v<=1.0001 then return math.abs((a.Y+v0.Y*u+v1.Y*v)-p.Y) end
-    return math.huge
+-- distPtTri measures a point against a triangle: the height between them where the point is over
+-- the triangle, and nothing where it is not. Most of that arithmetic is the triangle's alone, and
+-- the sampling loop measures every remaining sample against every triangle on every pass, so the
+-- triangle's share is worked out once per triangulation. A triangle is the corner the rest is
+-- measured from and ten f64s: its edge to the third corner and to the second (X and Z of each),
+-- their three dot products, the reciprocal of the determinant, and the two edges' Y.
+local PlaneBytes = 80
+
+--- The planes of `tris`, less the triangles with no area: nothing is over one of those.
+local function trianglePlanes(verts: { vector }, tris: { number }): ({ vector }, buffer)
+  local origins: { vector } = table.create(#tris // 4)
+  local terms = buffer.create(#tris // 4 * PlaneBytes)
+
+  for offset = 1, #tris, 4 do
+    local origin = verts[tris[offset] + 1]
+    local far, near = verts[tris[offset + 2] + 1] - origin, verts[tris[offset + 1] + 1] - origin
+    local farFar, farNear = far.X * far.X + far.Z * far.Z, far.X * near.X + far.Z * near.Z
+    local nearNear = near.X * near.X + near.Z * near.Z
+    local determinant = farFar * nearNear - farNear * farNear
+
+    if math.abs(determinant) < 1e-12 then continue end
+
+    local plane = #origins * PlaneBytes
+
+    table.insert(origins, origin)
+    buffer.writef64(terms, plane, far.X)
+    buffer.writef64(terms, plane + 8, far.Z)
+    buffer.writef64(terms, plane + 16, near.X)
+    buffer.writef64(terms, plane + 24, near.Z)
+    buffer.writef64(terms, plane + 32, farFar)
+    buffer.writef64(terms, plane + 40, farNear)
+    buffer.writef64(terms, plane + 48, nearNear)
+    buffer.writef64(terms, plane + 56, 1 / determinant)
+    buffer.writef64(terms, plane + 64, far.Y)
+    buffer.writef64(terms, plane + 72, near.Y)
+  end
+
+  return origins, terms
+end
+
+--- The least height between `point` and a triangle it is over, or -1 when it is over none.
+local function distanceToMesh(point: vector, origins: { vector }, terms: buffer): number
+  local best = math.huge
+
+  for triangle, origin in origins do
+    local plane = (triangle - 1) * PlaneBytes
+    local reach = point - origin
+    local reachX, reachZ = reach.X, reach.Z
+    local farReach = buffer.readf64(terms, plane) * reachX + buffer.readf64(terms, plane + 8) * reachZ
+    local nearReach = buffer.readf64(terms, plane + 16) * reachX + buffer.readf64(terms, plane + 24) * reachZ
+    local farNear, inverse = buffer.readf64(terms, plane + 40), buffer.readf64(terms, plane + 56)
+    local alongFar = (buffer.readf64(terms, plane + 48) * farReach - farNear * nearReach) * inverse
+    local alongNear = (buffer.readf64(terms, plane + 32) * nearReach - farNear * farReach) * inverse
+
+    -- Written as the test a point over the triangle passes: one that is not a number fails it.
+    if not (alongFar >= -1e-4 and alongNear >= -1e-4 and alongFar + alongNear <= 1.0001) then continue end
+
+    local farY, nearY = buffer.readf64(terms, plane + 64), buffer.readf64(terms, plane + 72)
+    local distance = math.abs((origin.Y + farY * alongFar + nearY * alongNear) - point.Y)
+
+    if distance < best then best = distance end
+  end
+
+  return if best == math.huge then -1 else best
 end
 
 local function distancePtSeg(pt,p,q)
@@ -99,15 +154,6 @@ local function distancePtSeg2d(pt,p,q)
     if d>0 then t/=d end; t=math.clamp(t,0,1)
     dx=p.X+t*pqx-pt.X; dz=p.Z+t*pqz-pt.Z
     return dx*dx+dz*dz
-end
-
-local function distToTriMesh(p,verts,tris)
-    local best=math.huge
-    for o=1,#tris,4 do
-        local d=distPtTri(p,verts[tris[o]+1],verts[tris[o+1]+1],verts[tris[o+2]+1])
-        if d<best then best=d end
-    end
-    return if best==math.huge then -1 else best
 end
 
 local function distToPoly(verts,p)
@@ -152,97 +198,222 @@ local function getHeight(fx,fy,fz,ics,ch,radius,hp)
     return height
 end
 
-local function edgeAt(edges,e)
-    local o=e*4+1; return edges[o],edges[o+1],edges[o+2],edges[o+3]
+-- The Delaunay pass keeps its edges as four numbers each (the two points, then the face on the
+-- left and on the right), and asks which edge joins two points more often than it does anything
+-- else. `slots` answers that in one read: for points `from` and `to` of `count`, the u16 at
+-- `from * count + to` is the edge's index plus one, or zero when no edge joins them. An edge is
+-- recorded both ways round, and no pair of points ever gets a second one.
+local function findEdge(slots: buffer, count: number, from: number, to: number): number
+  return buffer.readu16(slots, (from * count + to) * 2) - 1
 end
-local function setEdge(edges,e,s,t,l,r)
-    local o=e*4+1; edges[o],edges[o+1],edges[o+2],edges[o+3]=s,t,l,r
+
+local function addEdge(
+  edges: { number },
+  slots: buffer,
+  count: number,
+  maxEdges: number,
+  from: number,
+  to: number,
+  left: number,
+  right: number
+)
+  local edge = #edges // 4
+
+  if edge >= maxEdges or findEdge(slots, count, from, to) ~= EV_UNDEF then return end
+
+  local offset = edge * 4 + 1
+
+  edges[offset], edges[offset + 1], edges[offset + 2], edges[offset + 3] = from, to, left, right
+  buffer.writeu16(slots, (from * count + to) * 2, edge + 1)
+  buffer.writeu16(slots, (to * count + from) * 2, edge + 1)
 end
-local function findEdge(edges,s,t)
-    for e=0,#edges//4-1 do local a,b=edgeAt(edges,e); if (a==s and b==t) or (a==t and b==s) then return e end end
-    return EV_UNDEF
+
+local function updateLeftFace(edges: { number }, edge: number, from: number, to: number, face: number)
+  local offset = edge * 4 + 1
+  local start, finish = edges[offset], edges[offset + 1]
+
+  if start == from and finish == to and edges[offset + 2] == EV_UNDEF then
+    edges[offset + 2] = face
+  elseif finish == from and start == to and edges[offset + 3] == EV_UNDEF then
+    edges[offset + 3] = face
+  end
 end
-local function addEdge(edges,maxEdges,s,t,l,r)
-    if #edges//4>=maxEdges then return EV_UNDEF end
-    if findEdge(edges,s,t)~=EV_UNDEF then return EV_UNDEF end
-    local e=#edges//4; setEdge(edges,e,s,t,l,r); return e
-end
-local function updateLeftFace(edges,e,s,t,f)
-    local a,b,l,r=edgeAt(edges,e); local o=e*4+1
-    if a==s and b==t and l==EV_UNDEF then edges[o+2]=f elseif b==s and a==t and r==EV_UNDEF then edges[o+3]=f end
-end
+
 local function overlapSegSeg2d(a,b,c,d)
     local a1,a2=vcross2(a,b,d),vcross2(a,b,c)
     if a1*a2<0 then local a3=vcross2(c,d,a); local a4=a3+a2-a1; if a3*a4<0 then return true end end
     return false
 end
-local function overlapEdges(pts,edges,s1,t1)
-    for e=0,#edges//4-1 do
-        local s0,t0=edgeAt(edges,e)
-        if s0~=s1 and s0~=t1 and t0~=s1 and t0~=t1 and overlapSegSeg2d(pts[s0+1],pts[t0+1],pts[s1+1],pts[t1+1]) then return true end
-    end
-    return false
+
+local function overlapEdges(points: { vector }, edges: { number }, from: number, to: number): boolean
+  for offset = 1, #edges, 4 do
+    local start, finish = edges[offset], edges[offset + 1]
+
+    if start == from or start == to or finish == from or finish == to then continue end
+
+    if overlapSegSeg2d(points[start + 1], points[finish + 1], points[from + 1], points[to + 1]) then return true end
+  end
+
+  return false
 end
 
-local function completeFacet(pts,edges,maxEdges,nfaces,e)
-    local a,b,l,r=edgeAt(edges,e); local s,t
-    if l==EV_UNDEF then s,t=a,b elseif r==EV_UNDEF then s,t=b,a else return nfaces end
-    local pt=#pts; local center=vector.zero; local radius=-1
-    for u=0,#pts-1 do
-        if u==s or u==t then continue end
-        if vcross2(pts[s+1],pts[t+1],pts[u+1])>1e-5 then
-            if radius<0 then
-                pt=u; center,radius=circumCircle(pts[s+1],pts[t+1],pts[u+1]); continue
-            end
-            local d=vdist2(center,pts[u+1]); local tol=.001
-            if d>radius*(1+tol) then continue
-            elseif d<radius*(1-tol) then pt=u; center,radius=circumCircle(pts[s+1],pts[t+1],pts[u+1])
-            else
-                if overlapEdges(pts,edges,s,u) or overlapEdges(pts,edges,t,u) then continue end
-                pt=u; center,radius=circumCircle(pts[s+1],pts[t+1],pts[u+1])
-            end
-        end
+--- Closes the open side of `edge` with the point whose circumcircle holds no other, and returns
+--- the face count afterwards.
+local function completeFacet(
+  points: { vector },
+  edges: { number },
+  slots: buffer,
+  maxEdges: number,
+  faceCount: number,
+  edge: number
+): number
+  local offset = edge * 4 + 1
+  local from, to
+
+  if edges[offset + 2] == EV_UNDEF then
+    from, to = edges[offset], edges[offset + 1]
+  elseif edges[offset + 3] == EV_UNDEF then
+    from, to = edges[offset + 1], edges[offset]
+  else
+    return faceCount
+  end
+
+  local count = #points
+  local start, finish = points[from + 1], points[to + 1]
+  local alongX, alongZ = finish.X - start.X, finish.Z - start.Z
+  local apex, center, radius = count, vector.zero, -1
+
+  for candidate = 0, count - 1 do
+    if candidate == from or candidate == to then continue end
+
+    local point = points[candidate + 1]
+
+    -- Only a point to the left of the edge can close it. Written as the test such a point
+    -- passes, so a cross product that is not a number rules its point out, as upstream's does.
+    if not (alongX * (point.Z - start.Z) - alongZ * (point.X - start.X) > 1e-5) then continue end
+
+    if radius < 0 then
+      apex = candidate
+      center, radius = circumCircle(start, finish, point)
+
+      continue
     end
-    if pt<#pts then
-        updateLeftFace(edges,e,s,t,nfaces)
-        local e1=findEdge(edges,pt,s); if e1==EV_UNDEF then addEdge(edges,maxEdges,pt,s,nfaces,EV_UNDEF) else updateLeftFace(edges,e1,pt,s,nfaces) end
-        local e2=findEdge(edges,t,pt); if e2==EV_UNDEF then addEdge(edges,maxEdges,t,pt,nfaces,EV_UNDEF) else updateLeftFace(edges,e2,t,pt,nfaces) end
-        return nfaces+1
+
+    local offsetX, offsetZ = point.X - center.X, point.Z - center.Z
+    local distance = math.sqrt(offsetX * offsetX + offsetZ * offsetZ)
+
+    if distance > radius * (1 + CircleTolerance) then continue end
+
+    -- On the circle, within tolerance: the point takes over only if its edges cross none.
+    if
+      not (distance < radius * (1 - CircleTolerance))
+      and (overlapEdges(points, edges, from, candidate) or overlapEdges(points, edges, to, candidate))
+    then
+      continue
     end
-    updateLeftFace(edges,e,s,t,EV_HULL)
-    return nfaces
+
+    apex = candidate
+    center, radius = circumCircle(start, finish, point)
+  end
+
+  if apex >= count then
+    updateLeftFace(edges, edge, from, to, EV_HULL)
+
+    return faceCount
+  end
+
+  updateLeftFace(edges, edge, from, to, faceCount)
+
+  local closing = findEdge(slots, count, apex, from)
+
+  if closing == EV_UNDEF then
+    addEdge(edges, slots, count, maxEdges, apex, from, faceCount, EV_UNDEF)
+  else
+    updateLeftFace(edges, closing, apex, from, faceCount)
+  end
+
+  closing = findEdge(slots, count, to, apex)
+
+  if closing == EV_UNDEF then
+    addEdge(edges, slots, count, maxEdges, to, apex, faceCount, EV_UNDEF)
+  else
+    updateLeftFace(edges, closing, to, apex, faceCount)
+  end
+
+  return faceCount + 1
 end
 
-local function delaunayHull(pts,hull)
-    local edges={}; local nfaces=0; local maxEdges=#pts*10
-    local j=#hull
-    for i=1,#hull do addEdge(edges,maxEdges,hull[j],hull[i],EV_HULL,EV_UNDEF); j=i end
-    local current=0
-    while current<#edges//4 do
-        local _,_,l,r=edgeAt(edges,current)
-        if l==EV_UNDEF then nfaces=completeFacet(pts,edges,maxEdges,nfaces,current) end
-        _,_,l,r=edgeAt(edges,current)
-        if r==EV_UNDEF then nfaces=completeFacet(pts,edges,maxEdges,nfaces,current) end
-        current+=1
+local function delaunayHull(points: { vector }, hull: { number }): { number }
+  local count = #points
+  local edges: { number } = {}
+  local slots = buffer.create(count * count * 2)
+  local faceCount, maxEdges = 0, count * 10
+  local previous = #hull
+
+  for index = 1, #hull do
+    addEdge(edges, slots, count, maxEdges, hull[previous], hull[index], EV_HULL, EV_UNDEF)
+    previous = index
+  end
+
+  local current = 0
+
+  while current < #edges // 4 do
+    if edges[current * 4 + 3] == EV_UNDEF then
+      faceCount = completeFacet(points, edges, slots, maxEdges, faceCount, current)
     end
-    local tris=table.create(nfaces*4)
-    for i=1,nfaces*4 do tris[i]=-1 end
-    for e=0,#edges//4-1 do
-        local s,t,l,r=edgeAt(edges,e)
-        if r>=0 then
-            local o=r*4+1
-            if tris[o]==-1 then tris[o],tris[o+1]=s,t elseif tris[o]==t then tris[o+2]=s elseif tris[o+1]==s then tris[o+2]=t end
-        end
-        if l>=0 then
-            local o=l*4+1
-            if tris[o]==-1 then tris[o],tris[o+1]=t,s elseif tris[o]==s then tris[o+2]=t elseif tris[o+1]==t then tris[o+2]=s end
-        end
+
+    if edges[current * 4 + 4] == EV_UNDEF then
+      faceCount = completeFacet(points, edges, slots, maxEdges, faceCount, current)
     end
-    local o=1
-    while o<=#tris do
-        if tris[o]==-1 or tris[o+1]==-1 or tris[o+2]==-1 then for k=1,4 do table.remove(tris,o) end else o+=4 end
+
+    current += 1
+  end
+
+  local tris: { number } = table.create(faceCount * 4, -1)
+
+  for offset = 1, #edges, 4 do
+    local from, to, left, right = edges[offset], edges[offset + 1], edges[offset + 2], edges[offset + 3]
+
+    if right >= 0 then
+      local triangle = right * 4 + 1
+
+      if tris[triangle] == -1 then
+        tris[triangle], tris[triangle + 1] = from, to
+      elseif tris[triangle] == to then
+        tris[triangle + 2] = from
+      elseif tris[triangle + 1] == from then
+        tris[triangle + 2] = to
+      end
     end
-    return tris
+
+    if left >= 0 then
+      local triangle = left * 4 + 1
+
+      if tris[triangle] == -1 then
+        tris[triangle], tris[triangle + 1] = to, from
+      elseif tris[triangle] == from then
+        tris[triangle + 2] = to
+      elseif tris[triangle + 1] == to then
+        tris[triangle + 2] = from
+      end
+    end
+  end
+
+  local triangle = 1
+
+  while triangle <= #tris do
+    if tris[triangle] ~= -1 and tris[triangle + 1] ~= -1 and tris[triangle + 2] ~= -1 then
+      triangle += 4
+
+      continue
+    end
+
+    for _ = 1, 4 do
+      table.remove(tris, triangle)
+    end
+  end
+
+  return tris
 end
 
 local function polyMinExtent(verts)
@@ -337,23 +508,51 @@ local function buildPolyDetail(input,sampleDist,sampleMaxError,heightSearchRadiu
         for i=2,nin do local p=input[i]; bmin=vector.create(math.min(bmin.X,p.X),math.min(bmin.Y,p.Y),math.min(bmin.Z,p.Z)); bmax=vector.create(math.max(bmax.X,p.X),math.max(bmax.Y,p.Y),math.max(bmax.Z,p.Z)) end
         local x0,x1=math.floor(bmin.X/sampleDist),math.ceil(bmax.X/sampleDist)
         local z0,z1=math.floor(bmin.Z/sampleDist),math.ceil(bmax.Z/sampleDist)
-        local samples={}
-        for z=z0,z1-1 do for x=x0,x1-1 do
-            local p=vector.create(x*sampleDist,(bmax.Y+bmin.Y)*.5,z*sampleDist)
-            if distToPoly(input,p)<=-sampleDist/2 then samples[#samples+1]={x=x,h=getHeight(p.X,p.Y,p.Z,ics,chf.ch,heightSearchRadius,hp),z=z,added=false} end
-        end end
-        for iter=1,#samples do
-            if #verts>=MAX_VERTS then break end
-            local bestd,besti,bestp=0,-1,nil
-            for si=1,#samples do
-                local s=samples[si]; if s.added then continue end
-                local p=vector.create(s.x*sampleDist+jitterX(si-1)*cs*.1,s.h*chf.ch,s.z*sampleDist+jitterZ(si-1)*cs*.1)
-                local d=distToTriMesh(p,verts,tris)
-                if d>=0 and d>bestd then bestd,besti,bestp=d,si,p end
+        -- A sample's position never changes, so it is jittered once here, not on every pass
+        -- over the samples.
+        local positions: { vector }, added: { boolean } = {}, {}
+
+        for row = z0, z1 - 1 do
+          for column = x0, x1 - 1 do
+            local probe = vector.create(column * sampleDist, (bmax.Y + bmin.Y) * 0.5, row * sampleDist)
+
+            -- Written as the test a sample has to pass, so one whose distance is not a number
+            -- is left out as upstream leaves it out.
+            if not (distToPoly(input, probe) <= -sampleDist / 2) then continue end
+
+            local height = getHeight(probe.X, probe.Y, probe.Z, ics, chf.ch, heightSearchRadius, hp)
+            local sample = #positions
+
+            table.insert(added, false)
+            table.insert(positions, vector.create(
+              column * sampleDist + jitterX(sample) * cs * 0.1,
+              height * chf.ch,
+              row * sampleDist + jitterZ(sample) * cs * 0.1
+            ))
+          end
+        end
+
+        for _ = 1, #positions do
+          if #verts >= MAX_VERTS then break end
+
+          local origins, terms = trianglePlanes(verts, tris)
+          local farthest, chosen = 0, -1
+
+          for sample, position in positions do
+            if added[sample] then continue end
+
+            local distance = distanceToMesh(position, origins, terms)
+
+            if distance >= 0 and distance > farthest then
+              farthest, chosen = distance, sample
             end
-            if bestd<=sampleMaxError or besti==-1 then break end
-            samples[besti].added=true; verts[#verts+1]=bestp
-            tris=delaunayHull(verts,hull)
+          end
+
+          if farthest <= sampleMaxError or chosen == -1 then break end
+
+          added[chosen] = true
+          table.insert(verts, positions[chosen])
+          tris = delaunayHull(verts, hull)
         end
     end
     if #tris//4>MAX_TRIS then while #tris>MAX_TRIS*4 do table.remove(tris) end end
