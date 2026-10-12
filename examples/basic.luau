@@ -1,0 +1,52 @@
+-- Run with:
+--   jess run --package /path/to/recast-luau.jpk examples/basic.luau
+
+local recast = require('@recast')
+local dt = recast.Detour
+
+local size = 8
+local vertices = {}
+for z = 0, size do
+    for x = 0, size do
+        vertices[#vertices + 1] = vector.create(x, 0, z)
+    end
+end
+
+local function vi(x, z)
+    return z * (size + 1) + x + 1
+end
+
+local triangles = {}
+for z = 0, size - 1 do
+    for x = 0, size - 1 do
+        local a, b = vi(x, z), vi(x, z + 1)
+        local c, d = vi(x + 1, z), vi(x + 1, z + 1)
+        triangles[#triangles + 1] = {a, b, c}
+        triangles[#triangles + 1] = {c, b, d}
+    end
+end
+
+local build = recast.build(vertices, triangles, {
+    cs = 0.5,
+    ch = 0.2,
+    agentHeight = 1.8,
+    agentRadius = 0.4,
+    agentMaxClimb = 0.6,
+    walkableSlopeAngle = 45,
+})
+
+local filter = dt.newQueryFilter()
+local result, err = recast.query(
+    build.navmesh,
+    vector.create(1.0, 0, 1.0),
+    vector.create(7.0, 0, 7.0),
+    vector.create(2, 4, 2),
+    filter
+)
+assert(result, err)
+
+print(`compact spans: {build.compact.spanCount}`)
+print(`query triangles: {build.navmesh.polyCount}`)
+for i, point in result.points do
+    print(i, point)
+end

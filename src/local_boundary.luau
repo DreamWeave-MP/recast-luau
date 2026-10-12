@@ -1,0 +1,80 @@
+--!native
+
+-- Altered pure-Luau port of DetourCrowd's dtLocalBoundary.
+
+local Detour = require('@recast/detour')
+local Boundary = {}
+
+Boundary.MAX_LOCAL_SEGS = 8
+Boundary.MAX_LOCAL_POLYS = 16
+
+local function distancePtSegSqr2D(p, a, b)
+    local dx, dz = b.X-a.X, b.Z-a.Z
+    local d = dx*dx+dz*dz
+    local t = 0
+    if d > 1e-12 then t=math.clamp(((p.X-a.X)*dx+(p.Z-a.Z)*dz)/d,0,1) end
+    local qx,qz=a.X+dx*t,a.Z+dz*t
+    local ex,ez=p.X-qx,p.Z-qz
+    return ex*ex+ez*ez
+end
+
+function Boundary.new()
+    return {center=nil,segments={},polys={}}
+end
+
+function Boundary.reset(boundary)
+    boundary.center=nil
+    table.clear(boundary.segments)
+    table.clear(boundary.polys)
+    return boundary
+end
+
+function Boundary.addSegment(boundary, dist, a, b)
+    local segs=boundary.segments
+    local insert=#segs+1
+    for i=1,#segs do if dist<=segs[i].distance then insert=i break end end
+    if insert>Boundary.MAX_LOCAL_SEGS then return false end
+    local count=math.min(#segs+1,Boundary.MAX_LOCAL_SEGS)
+    for i=count,insert+1,-1 do segs[i]=segs[i-1] end
+    segs[insert]={a=a,b=b,distance=dist}
+    if #segs>Boundary.MAX_LOCAL_SEGS then segs[Boundary.MAX_LOCAL_SEGS+1]=nil end
+    return true
+end
+
+function Boundary.update(boundary, nav, ref, pos, collisionQueryRange, filter)
+    if ref==nil or ref==0 then return Boundary.reset(boundary) end
+    boundary.center=pos
+    local refs=Detour.findLocalNeighbourhood(nav,ref,pos,collisionQueryRange,filter)
+    table.clear(boundary.polys)
+    if refs~=nil then
+        for i=1,math.min(#refs,Boundary.MAX_LOCAL_POLYS) do boundary.polys[i]=refs[i] end
+    end
+    table.clear(boundary.segments)
+    local range2=collisionQueryRange*collisionQueryRange
+    for _,polyRef in boundary.polys do
+        local walls=Detour.getPolyWallSegments(nav,polyRef,filter,false)
+        if walls~=nil then
+            for _,seg in walls do
+                local d2=distancePtSegSqr2D(pos,seg.a,seg.b)
+                if d2<=range2 then Boundary.addSegment(boundary,d2,seg.a,seg.b) end
+            end
+        end
+    end
+    return boundary
+end
+
+function Boundary.isValid(boundary, nav, filter)
+    if #boundary.polys==0 then return false end
+    for _,ref in boundary.polys do if not Detour.isValidPolyRef(nav,ref,filter) then return false end end
+    return true
+end
+
+function Boundary.getCenter(boundary) return boundary.center end
+function Boundary.getSegmentCount(boundary) return #boundary.segments end
+function Boundary.getSegment(boundary,index)
+    if index<0 or index>=#boundary.segments then return nil end
+    local s=boundary.segments[index+1]
+    return s.a,s.b,s.distance
+end
+
+return table.freeze(Boundary)

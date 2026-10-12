@@ -1,0 +1,204 @@
+--!native
+
+-- Altered pure-Luau port of DetourCrowd's dtPathCorridor.
+local Detour = require('@recast/detour')
+local Corridor = {}
+
+local function copyInto(dst, src, maxPath)
+    table.clear(dst)
+    local n=math.min(#src,maxPath or #src)
+    for i=1,n do dst[i]=src[i] end
+    return dst
+end
+
+function Corridor.mergeCorridorStartMoved(path, visited, maxPath)
+    maxPath=maxPath or math.huge
+    local furthestPath,furthestVisited=-1,-1
+    for i=#path,1,-1 do
+        local found=false
+        for j=#visited,1,-1 do if path[i]==visited[j] then furthestPath,furthestVisited,found=i,j,true end end
+        if found then break end
+    end
+    if furthestPath<0 then return path end
+    local out={}
+    local req=#visited-furthestVisited+1
+    for j=#visited,furthestVisited,-1 do if #out<maxPath then out[#out+1]=visited[j] end end
+    for i=furthestPath+1,#path do if #out<maxPath then out[#out+1]=path[i] end end
+    return copyInto(path,out,maxPath)
+end
+
+function Corridor.mergeCorridorEndMoved(path, visited, maxPath)
+    maxPath=maxPath or math.huge
+    local furthestPath,furthestVisited=-1,-1
+    for i=1,#path do
+        local found=false
+        for j=#visited,1,-1 do if path[i]==visited[j] then furthestPath,furthestVisited,found=i,j,true end end
+        if found then break end
+    end
+    if furthestPath<0 then return path end
+    local out={}
+    for i=1,furthestPath do if #out<maxPath then out[#out+1]=path[i] end end
+    for j=furthestVisited+1,#visited do if #out<maxPath then out[#out+1]=visited[j] end end
+    return copyInto(path,out,maxPath)
+end
+
+function Corridor.mergeCorridorStartShortcut(path, visited, maxPath)
+    maxPath=maxPath or math.huge
+    local furthestPath,furthestVisited=-1,-1
+    for i=#path,1,-1 do
+        local found=false
+        for j=#visited,1,-1 do if path[i]==visited[j] then furthestPath,furthestVisited,found=i,j,true end end
+        if found then break end
+    end
+    if furthestPath<0 or furthestVisited<=1 then return path end
+    local out={}
+    for j=1,furthestVisited-1 do if #out<maxPath then out[#out+1]=visited[j] end end
+    for i=furthestPath,#path do if #out<maxPath then out[#out+1]=path[i] end end
+    return copyInto(path,out,maxPath)
+end
+
+function Corridor.new(maxPath)
+    assert(maxPath and maxPath>0,'maxPath must be positive')
+    return {maxPath=math.floor(maxPath),path={},position=vector.zero,target=vector.zero}
+end
+
+function Corridor.reset(c, ref, pos)
+    c.position=pos; c.target=pos
+    table.clear(c.path); c.path[1]=ref
+    return c
+end
+
+function Corridor.setCorridor(c,target,path)
+    if path==nil or #path==0 then return false end
+    c.target=target; copyInto(c.path,path,c.maxPath)
+    return true
+end
+
+function Corridor.getPos(c) return c.position end
+function Corridor.getTarget(c) return c.target end
+function Corridor.getFirstPoly(c) return c.path[1] or 0 end
+function Corridor.getLastPoly(c) return c.path[#c.path] or 0 end
+function Corridor.getPath(c) return c.path end
+function Corridor.getPathCount(c) return #c.path end
+
+function Corridor.findCorners(c,nav,filter,maxCorners)
+    if #c.path==0 then return nil end
+    local points,flags,refs=Detour.findStraightPath(nav,c.position,c.target,c.path)
+    if points==nil then return nil end
+    maxCorners=maxCorners or math.huge
+    local outP,outF,outR={},{},{}
+    local minDist2=0.01*0.01
+    for i=1,#points do
+        local flag=flags[i] or 0
+        local dx,dz=points[i].X-c.position.X,points[i].Z-c.position.Z
+        if #outP==0 and bit32.band(flag,Detour.DT_STRAIGHTPATH_OFFMESH_CONNECTION)==0 and dx*dx+dz*dz<=minDist2 then
+            continue
+        end
+        outP[#outP+1],outF[#outF+1],outR[#outR+1]=points[i],flag,refs[i] or 0
+        if bit32.band(flag,Detour.DT_STRAIGHTPATH_OFFMESH_CONNECTION)~=0 or #outP>=maxCorners then break end
+    end
+    return outP,outF,outR
+end
+
+function Corridor.optimizePathVisibility(c,nextPos,pathOptimizationRange,nav,filter)
+    if #c.path==0 then return false end
+    local dx,dz=nextPos.X-c.position.X,nextPos.Z-c.position.Z
+    local originalDist=math.sqrt(dx*dx+dz*dz)
+    if originalDist<0.01 then return false end
+    local dist=math.min(originalDist+0.01,pathOptimizationRange)
+    local scale=pathOptimizationRange/dist
+    local goal=c.position+(nextPos-c.position)*scale
+    local hit=Detour.raycast(nav,c.path[1],c.position,goal,filter)
+    if hit~=nil and #hit.path>1 and hit.t>0.99 then
+        Corridor.mergeCorridorStartShortcut(c.path,hit.path,c.maxPath)
+        return true
+    end
+    return false
+end
+
+function Corridor.optimizePathTopology(c,nav,filter)
+    if #c.path<3 then return false end
+    local status=Detour.initSlicedFindPath(nav,c.path[1],c.path[#c.path],c.position,c.target,filter,0)
+    if Detour.statusFailed(status) then return false end
+    Detour.updateSlicedFindPath(nav,32)
+    local result,finalStatus=Detour.finalizeSlicedFindPathPartial(nav,c.path)
+    if result~=nil and #result>0 and Detour.statusSucceed(finalStatus) then
+        Corridor.mergeCorridorStartShortcut(c.path,result,c.maxPath)
+        return true
+    end
+    return false
+end
+
+function Corridor.movePosition(c,npos,nav,filter)
+    if #c.path==0 then return false end
+    local result,visited=Detour.moveAlongSurface(nav,c.path[1],c.position,npos,filter)
+    if result==nil then return false end
+    Corridor.mergeCorridorStartMoved(c.path,visited,c.maxPath)
+    if #c.path==0 then return false end
+    local h=Detour.getPolyHeight(nav,c.path[1],result)
+    if h~=nil then result=vector.create(result.X,h,result.Z) end
+    c.position=result
+    return true
+end
+
+function Corridor.moveTargetPosition(c,npos,nav,filter)
+    if #c.path==0 then return false end
+    local result,visited=Detour.moveAlongSurface(nav,c.path[#c.path],c.target,npos,filter)
+    if result==nil then return false end
+    Corridor.mergeCorridorEndMoved(c.path,visited,c.maxPath)
+    c.target=result
+    return true
+end
+
+function Corridor.isValid(c,maxLookAhead,nav,filter)
+    local n=math.min(#c.path,maxLookAhead or #c.path)
+    for i=1,n do if not Detour.isValidPolyRef(nav,c.path[i],filter) then return false end end
+    return n>0
+end
+
+function Corridor.trimInvalidPath(c,safeRef,safePos,nav,filter)
+    local n=0
+    while n<#c.path and Detour.isValidPolyRef(nav,c.path[n+1],filter) do n+=1 end
+    if n==#c.path then return true end
+    if n==0 then
+        c.position=safePos; table.clear(c.path); c.path[1]=safeRef
+    else
+        for i=#c.path,n+1,-1 do c.path[i]=nil end
+    end
+    local last=c.path[#c.path]
+    local target=Detour.closestPointOnPolyBoundary(nav,last,c.target)
+    if target~=nil then c.target=target end
+    return true
+end
+
+function Corridor.fixPathStart(c,safeRef,safePos)
+    c.position=safePos
+    local n=#c.path
+    if n<3 and n>0 then
+        local last=c.path[n]
+        c.path[1],c.path[2],c.path[3]=safeRef,0,last
+    elseif n>0 then
+        c.path[1],c.path[2]=safeRef,0
+    else
+        c.path[1]=safeRef
+    end
+    return true
+end
+
+-- Becomes live once Detour off-mesh polygon refs/endpoints are present.
+function Corridor.moveOverOffmeshConnection(c,offMeshConRef,nav)
+    if Detour.getOffMeshConnectionPolyEndPoints==nil then return false end
+    local prevRef=0; local index=nil
+    for i,ref in c.path do
+        if ref==offMeshConRef then index=i break end
+        prevRef=ref
+    end
+    if index==nil then return false end
+    local startPos,endPos=Detour.getOffMeshConnectionPolyEndPoints(nav,prevRef,offMeshConRef)
+    if startPos==nil then return false end
+    for _=1,index do table.remove(c.path,1) end
+    c.position=endPos
+    return true,{prevRef,offMeshConRef},startPos,endPos
+end
+
+return table.freeze(Corridor)
