@@ -83,17 +83,16 @@ type PolyMesh = {
 }
 
 local QuadVertices = 4
-
---- An rcPolyMesh of `size` by `size` unit quads on a flat grid, each wired to its four
+--- An rcPolyMesh of `columns` by `rows` unit quads on a flat grid, each wired to its four
 --- neighbours: every quantized minimum ties across a whole row or column, which is the case the
 --- serialized BV tree's order has to get right.
-local function gridMesh(size: number): PolyMesh
-  local side = size + 1
-  local vertexCount, polygonCount = side * side, size * size
+local function gridMesh(columns: number, rows: number): PolyMesh
+  local side = columns + 1
+  local vertexCount, polygonCount = side * (rows + 1), columns * rows
   local verts = buffer.create(vertexCount * 6)
 
-  for row = 0, size do
-    for column = 0, size do
+  for row = 0, rows do
+    for column = 0, columns do
       local offset = (row * side + column) * 6
 
       buffer.writeu16(verts, offset, column)
@@ -107,9 +106,9 @@ local function gridMesh(size: number): PolyMesh
   buffer.fill(polys, 0, 0xff)
   buffer.fill(areas, 0, 1)
 
-  for row = 0, size - 1 do
-    for column = 0, size - 1 do
-      local polygon = row * size + column
+  for row = 0, rows - 1 do
+    for column = 0, columns - 1 do
+      local polygon = row * columns + column
       local offset = polygon * QuadVertices * 4
       local corner = row * side + column
 
@@ -119,11 +118,11 @@ local function gridMesh(size: number): PolyMesh
       buffer.writeu16(polys, offset + 4, corner + side + 1)
       buffer.writeu16(polys, offset + 6, corner + side)
 
-      if row > 0 then buffer.writeu16(polys, offset + 8, polygon - size) end
+      if row > 0 then buffer.writeu16(polys, offset + 8, polygon - columns) end
 
-      if column < size - 1 then buffer.writeu16(polys, offset + 10, polygon + 1) end
+      if column < columns - 1 then buffer.writeu16(polys, offset + 10, polygon + 1) end
 
-      if row < size - 1 then buffer.writeu16(polys, offset + 12, polygon + size) end
+      if row < rows - 1 then buffer.writeu16(polys, offset + 12, polygon + columns) end
 
       if column > 0 then buffer.writeu16(polys, offset + 14, polygon - 1) end
     end
@@ -138,7 +137,7 @@ local function gridMesh(size: number): PolyMesh
     flags = flags,
     areas = areas,
     bmin = vector.zero,
-    bmax = vector.create(size, 1, size),
+    bmax = vector.create(columns, 1, rows),
     cs = 1,
     ch = 1,
     walkableClimb = 1,
@@ -147,7 +146,7 @@ end
 
 type DetailMesh = { meshes: buffer, verts: buffer, nverts: number, tris: buffer, ntris: number }
 
---- A detail mesh for `gridMesh(size)`: each quad's corners and a centre sample at one of five
+--- A detail mesh for `gridMesh(size, size)`: each quad's corners and a centre sample at one of five
 --- heights, fanned into four triangles. The heights tie often, as terrain samples do.
 local function gridDetail(size: number): DetailMesh
   local side = size + 1
@@ -260,7 +259,8 @@ local function numberDigest(value: number): string
 end
 
 do
-  local small, large = gridMesh(127), gridMesh(254)
+  local small, large = gridMesh(127, 127), gridMesh(254, 254)
+  local strip = gridMesh(15, 4000)
   local detail = gridDetail(127)
 
   workload('tile, 16129 polygons, no BV tree', '49e48a3c07fa975f6149f5276ef1863320371e05a68ab0b076d92f86d371246d', function()
@@ -281,6 +281,10 @@ do
 
   workload('tile, 64516 polygons, BV tree', '32524cbbbf9e175dcd9c64a69ac65e217c88f975f06d876b8e0c68785148e710', function()
     return assert(builder.createNavMeshDataFromPolyMesh(large, nil, tileOptions(true)))
+  end, tileDigest)
+
+  workload('tile, a strip of 15 by 4000 polygons, BV tree', 'e49b639bfc150a1e5433b0c531cf2bbd9d58efdc5b9a16a93f10ce714b94856d', function()
+    return assert(builder.createNavMeshDataFromPolyMesh(strip, nil, tileOptions(true)))
   end, tileDigest)
 end
 
@@ -389,7 +393,7 @@ do
 end
 
 do
-  local mesh = gridMesh(128)
+  local mesh = gridMesh(128, 128)
   local navmesh = detour.buildPolyMeshNavMesh(mesh)
   local halfExtents = vector.create(0.51, 1, 0.51)
 
@@ -426,7 +430,7 @@ end
 
 do
   local size = 96
-  local navmesh = detour.buildPolyMeshNavMesh(gridMesh(size))
+  local navmesh = detour.buildPolyMeshNavMesh(gridMesh(size, size))
   local first, last = 1, size * size
   local start, finish = vector.create(0.25, 0, 0.25), vector.create(size - 0.25, 0, size - 0.25)
 
