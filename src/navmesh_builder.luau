@@ -23,6 +23,7 @@ local DETAIL_BYTES = 12
 local BV_BYTES = 16
 local OFFMESH_BYTES = 36
 local MESH_NULL_IDX = 0xffff
+local ExternalLink = 0x8000
 
 local function align4(n)
     return bit32.band(n + 3, bit32.bnot(3))
@@ -91,16 +92,6 @@ local function writeF32Vec3(data, o, v)
     buffer.writef32(data, o, v.X)
     buffer.writef32(data, o + 4, v.Y)
     buffer.writef32(data, o + 8, v.Z)
-end
-
-local function polyVertCount(params, poly0)
-    local base = poly0 * params.nvp * 4
-    local n = 0
-    for j0 = 0, params.nvp - 1 do
-        if buffer.readu16(params.polys, base + j0 * 2) == MESH_NULL_IDX then break end
-        n += 1
-    end
-    return n
 end
 
 -- A subtree of this many polygons or fewer is sorted here, by insertion; above it one stable
@@ -356,28 +347,43 @@ function Builder.createNavMeshData(params)
 
     local totalPolyCount=p.polyCount+storedOffMeshConCount
     local totalVertCount=p.vertCount+storedOffMeshConCount*2
-    local edgeCount,portalCount=0,0
-    for p0=0,p.polyCount-1 do
-        local base=p0*p.nvp*4
-        for j0=0,p.nvp-1 do
-            if buffer.readu16(p.polys,base+j0*2)==MESH_NULL_IDX then break end
-            edgeCount+=1
-            local nei=buffer.readu16(p.polys,base+(p.nvp+j0)*2)
-            if bit32.band(nei,0x8000)~=0 and bit32.band(nei,0xf)~=0xf then portalCount+=1 end
-        end
-    end
-    local maxLinkCount=edgeCount+portalCount*2+offMeshConLinkCount*2
+    local polys, vertsPerPolygon = p.polys, p.nvp
+    local edgeCount, portalCount = 0, 0
+    -- What a polygon's vertices fan into when the mesh has no detail triangles of its own.
+    local fanTriangleCount = 0
 
-    local uniqueDetailVertCount,detailTriCount=0,0
-    if p.detailMeshes~=nil then
-        detailTriCount=p.detailTriCount
-        for p0=0,p.polyCount-1 do
-            local mo=p0*16
-            local ndv=buffer.readu32(p.detailMeshes,mo+4)
-            uniqueDetailVertCount += ndv-polyVertCount(p,p0)
-        end
-    else
-        for p0=0,p.polyCount-1 do detailTriCount += polyVertCount(p,p0)-2 end
+    for polygon = 0, p.polyCount - 1 do
+      local base = polygon * vertsPerPolygon * 4
+      local corners = 0
+
+      for corner = 0, vertsPerPolygon - 1 do
+        if buffer.readu16(polys, base + corner * 2) == MESH_NULL_IDX then break end
+
+        corners += 1
+
+        local neighbour = buffer.readu16(polys, base + (vertsPerPolygon + corner) * 2)
+
+        if bit32.band(neighbour, 0x8000) ~= 0 and bit32.band(neighbour, 0xf) ~= 0xf then portalCount += 1 end
+      end
+
+      edgeCount += corners
+      fanTriangleCount += corners - 2
+    end
+
+    local maxLinkCount=edgeCount+portalCount*2+offMeshConLinkCount*2
+    local uniqueDetailVertCount, detailTriCount = 0, fanTriangleCount
+
+    if p.detailMeshes ~= nil then
+      local detailMeshes = p.detailMeshes
+
+      detailTriCount = p.detailTriCount
+
+      for polygon = 0, p.polyCount - 1 do
+        uniqueDetailVertCount += buffer.readu32(detailMeshes, polygon * 16 + 4)
+      end
+
+      -- A detail submesh starts with its polygon's own vertices, which the tile doesn't repeat.
+      uniqueDetailVertCount -= edgeCount
     end
 
     local headerSize=align4(HEADER_BYTES)
@@ -409,12 +415,17 @@ function Builder.createNavMeshData(params)
     buffer.writef32(data,60,p.walkableHeight); buffer.writef32(data,64,p.walkableRadius); buffer.writef32(data,68,p.walkableClimb)
     writeF32Vec3(data,72,p.bmin); writeF32Vec3(data,84,p.bmax); buffer.writef32(data,96,1/p.cs)
 
-    for i0=0,p.vertCount-1 do
-        local io=i0*6; local oo=vertsOff+i0*12
-        buffer.writef32(data,oo,p.bmin.X+buffer.readu16(p.verts,io)*p.cs)
-        buffer.writef32(data,oo+4,p.bmin.Y+buffer.readu16(p.verts,io+2)*p.ch)
-        buffer.writef32(data,oo+8,p.bmin.Z+buffer.readu16(p.verts,io+4)*p.cs)
+    local verts, cellSize, cellHeight = p.verts, p.cs, p.ch
+    local originX, originY, originZ = p.bmin.X, p.bmin.Y, p.bmin.Z
+
+    for vertex = 0, p.vertCount - 1 do
+      local cell, position = vertex * 6, vertsOff + vertex * 12
+
+      buffer.writef32(data, position, originX + buffer.readu16(verts, cell) * cellSize)
+      buffer.writef32(data, position + 4, originY + buffer.readu16(verts, cell + 2) * cellHeight)
+      buffer.writef32(data, position + 8, originZ + buffer.readu16(verts, cell + 4) * cellSize)
     end
+
     local stored=0
     for i0=0,p.offMeshConCount-1 do
         if offClass[i0*2+1]~=0xff then continue end
@@ -422,29 +433,48 @@ function Builder.createNavMeshData(params)
         stored+=1
     end
 
-    for p0=0,p.polyCount-1 do
-        local po=polysOff+p0*POLY_BYTES
-        local src=p0*p.nvp*4
-        local count=0
-        buffer.writeu16(data,po+28,buffer.readu16(p.polyFlags,p0*2))
-        buffer.writeu8(data,po+31,bit32.band(buffer.readu8(p.polyAreas,p0),0x3f))
-        for j0=0,p.nvp-1 do
-            local vi=buffer.readu16(p.polys,src+j0*2)
-            if vi==MESH_NULL_IDX then break end
-            buffer.writeu16(data,po+4+j0*2,vi)
-            local nei=buffer.readu16(p.polys,src+(p.nvp+j0)*2)
-            local outNei=0
-            if bit32.band(nei,0x8000)~=0 then
-                local dir=bit32.band(nei,0xf)
-                if dir==0 then outNei=bit32.bor(Builder.DT_EXT_LINK,4)
-                elseif dir==1 then outNei=bit32.bor(Builder.DT_EXT_LINK,2)
-                elseif dir==2 then outNei=bit32.bor(Builder.DT_EXT_LINK,0)
-                elseif dir==3 then outNei=bit32.bor(Builder.DT_EXT_LINK,6) end
-            elseif nei~=MESH_NULL_IDX then outNei=nei+1 end
-            buffer.writeu16(data,po+16+j0*2,outNei)
-            count+=1
+    local polyFlags, polyAreas = p.polyFlags, p.polyAreas
+
+    for polygon = 0, p.polyCount - 1 do
+      local record = polysOff + polygon * POLY_BYTES
+      local base = polygon * vertsPerPolygon * 4
+      local corners = 0
+
+      buffer.writeu16(data, record + 28, buffer.readu16(polyFlags, polygon * 2))
+      buffer.writeu8(data, record + 31, bit32.band(buffer.readu8(polyAreas, polygon), 0x3f))
+
+      for corner = 0, vertsPerPolygon - 1 do
+        local vertex = buffer.readu16(polys, base + corner * 2)
+
+        if vertex == MESH_NULL_IDX then break end
+
+        buffer.writeu16(data, record + 4 + corner * 2, vertex)
+
+        local neighbour = buffer.readu16(polys, base + (vertsPerPolygon + corner) * 2)
+        local link = 0
+
+        if bit32.band(neighbour, 0x8000) ~= 0 then
+          -- A portal edge: rcPolyMesh names the side 0 to 3, a tile the neighbour direction.
+          local side = bit32.band(neighbour, 0xf)
+
+          if side == 0 then
+            link = ExternalLink + 4
+          elseif side == 1 then
+            link = ExternalLink + 2
+          elseif side == 2 then
+            link = ExternalLink
+          elseif side == 3 then
+            link = ExternalLink + 6
+          end
+        elseif neighbour ~= MESH_NULL_IDX then
+          link = neighbour + 1
         end
-        buffer.writeu8(data,po+30,count)
+
+        buffer.writeu16(data, record + 16 + corner * 2, link)
+        corners += 1
+      end
+
+      buffer.writeu8(data, record + 30, corners)
     end
 
     stored=0
@@ -457,31 +487,58 @@ function Builder.createNavMeshData(params)
         stored+=1
     end
 
-    if p.detailMeshes~=nil then
-        local vbase=0
-        for p0=0,p.polyCount-1 do
-            local mi=p0*16; local mo=detailMeshesOff+p0*DETAIL_BYTES
-            local vb=buffer.readu32(p.detailMeshes,mi); local ndv=buffer.readu32(p.detailMeshes,mi+4)
-            local nv=polyVertCount(p,p0); local extra=ndv-nv
-            buffer.writeu32(data,mo,vbase); buffer.writeu32(data,mo+4,buffer.readu32(p.detailMeshes,mi+8))
-            buffer.writeu8(data,mo+8,extra); buffer.writeu8(data,mo+9,buffer.readu32(p.detailMeshes,mi+12))
-            if extra>0 then buffer.copy(data,detailVertsOff+vbase*12,p.detailVerts,(vb+nv)*12,extra*12); vbase+=extra end
+    -- The polygon records just written hold each polygon's vertex count, at byte 30.
+    if p.detailMeshes ~= nil then
+      local detailMeshes, detailVerts = p.detailMeshes, p.detailVerts
+      local vertexBase = 0
+
+      for polygon = 0, p.polyCount - 1 do
+        local source, record = polygon * 16, detailMeshesOff + polygon * DETAIL_BYTES
+        local firstVertex = buffer.readu32(detailMeshes, source)
+        local corners = buffer.readu8(data, polysOff + polygon * POLY_BYTES + 30)
+        local extra = buffer.readu32(detailMeshes, source + 4) - corners
+
+        buffer.writeu32(data, record, vertexBase)
+        buffer.writeu32(data, record + 4, buffer.readu32(detailMeshes, source + 8))
+        buffer.writeu8(data, record + 8, extra)
+        buffer.writeu8(data, record + 9, buffer.readu32(detailMeshes, source + 12))
+
+        if extra > 0 then
+          buffer.copy(data, detailVertsOff + vertexBase * 12, detailVerts, (firstVertex + corners) * 12, extra * 12)
+          vertexBase += extra
         end
-        if p.detailTriCount>0 then buffer.copy(data,detailTrisOff,p.detailTris,0,p.detailTriCount*4) end
+      end
+
+      if p.detailTriCount > 0 then buffer.copy(data, detailTrisOff, p.detailTris, 0, p.detailTriCount * 4) end
     else
-        local tbase=0
-        for p0=0,p.polyCount-1 do
-            local mo=detailMeshesOff+p0*DETAIL_BYTES; local nv=polyVertCount(p,p0)
-            buffer.writeu32(data,mo,0); buffer.writeu32(data,mo+4,tbase); buffer.writeu8(data,mo+8,0); buffer.writeu8(data,mo+9,nv-2)
-            for j=2,nv-1 do
-                local to=detailTrisOff+tbase*4
-                buffer.writeu8(data,to,0); buffer.writeu8(data,to+1,j-1); buffer.writeu8(data,to+2,j)
-                local flags=bit32.lshift(1,2)
-                if j==2 then flags=bit32.bor(flags,bit32.lshift(1,0)) end
-                if j==nv-1 then flags=bit32.bor(flags,bit32.lshift(1,4)) end
-                buffer.writeu8(data,to+3,flags); tbase+=1
-            end
+      local triangleBase = 0
+
+      for polygon = 0, p.polyCount - 1 do
+        local record = detailMeshesOff + polygon * DETAIL_BYTES
+        local corners = buffer.readu8(data, polysOff + polygon * POLY_BYTES + 30)
+
+        buffer.writeu32(data, record, 0)
+        buffer.writeu32(data, record + 4, triangleBase)
+        buffer.writeu8(data, record + 8, 0)
+        buffer.writeu8(data, record + 9, corners - 2)
+
+        -- A fan from the polygon's first vertex. A triangle's edge that is also the polygon's is
+        -- flagged a boundary: the one between two corners always, a spoke only at an end of the fan.
+        for corner = 2, corners - 1 do
+          local triangle = detailTrisOff + triangleBase * 4
+          local flags = bit32.lshift(1, 2)
+
+          if corner == 2 then flags = bit32.bor(flags, bit32.lshift(1, 0)) end
+
+          if corner == corners - 1 then flags = bit32.bor(flags, bit32.lshift(1, 4)) end
+
+          buffer.writeu8(data, triangle, 0)
+          buffer.writeu8(data, triangle + 1, corner - 1)
+          buffer.writeu8(data, triangle + 2, corner)
+          buffer.writeu8(data, triangle + 3, flags)
+          triangleBase += 1
         end
+      end
     end
 
     if p.buildBvTree then
