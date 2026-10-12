@@ -345,4 +345,14 @@ suite.it('sorts a detail mesh on each axis by its quantized minimum', function()
   end
 end)
 
+suite.it('builds a one-polygon tree when the polygon count arrives as a numeric string', function()
+  local counted: { [string]: unknown } = table.clone(grid(1)) :: {}
+
+  counted.polyCount = '1'
+
+  local tile = assert(builder.createNavMeshData(counted))
+
+  expect(bytes.sha256(tile)).toBe(digest(grid(1)))
+end)
+
 return suite

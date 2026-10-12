@@ -122,9 +122,8 @@ type TreeParams = {
 
 --- Each polygon's quantized bounds, and its minimum again as three f32 columns (X, then Y, then
 --- Z, each `polyCount` elements) for the sorts to read as keys.
-local function quantizedBounds(params: TreeParams): ({ vector }, { vector }, buffer)
-  local polygonCount, vertsPerPolygon = params.polyCount, params.nvp
-  local verts, polys = params.verts, params.polys
+local function quantizedBounds(params: TreeParams, polygonCount: number): ({ vector }, { vector }, buffer)
+  local verts, polys, vertsPerPolygon = params.verts, params.polys, params.nvp
   local detailMeshes, detailVerts = params.detailMeshes, params.detailVerts
   local originX, originY, originZ = params.bmin.X, params.bmin.Y, params.bmin.Z
   local cellSize, cellHeight = params.cs, params.ch
@@ -208,12 +207,14 @@ end
 --- minimum on the subtree's longest axis, then halved. That order is part of the tile's bytes,
 --- and upstream's qsort leaves tied polygons as it found them, so every sort here is stable.
 local function buildBVTree(params: TreeParams): buffer
-  local polygonCount = params.polyCount
-  local nodes = buffer.create(polygonCount * 2 * BV_BYTES)
+  local nodes = buffer.create(params.polyCount * 2 * BV_BYTES)
 
-  if polygonCount == 0 then return nodes end
+  if params.polyCount == 0 then return nodes end
 
-  local mins, maxs, keys = quantizedBounds(params)
+  -- A count that arrived as a numeric string has always built a tree, since arithmetic makes a
+  -- number of it. The comparisons below would not.
+  local polygonCount = tonumber(params.polyCount) :: number
+  local mins, maxs, keys = quantizedBounds(params, polygonCount)
   local order = buffer.create(polygonCount * 4)
   -- What one argsort works in: the subtree's polygons, their keys in that order, the
   -- permutation that sorts them, and the merge's own scratch.
