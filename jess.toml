@@ -5,7 +5,7 @@ id = "org.dreamweave.recast"
 version = "0.2.0"
 jess_api = "1"
 include = ["src", "examples", "bench", "tests", "RECAST-LICENSE.txt", "README.md"]
-tests = ["tests/recast_spec.luau", "tests/detour_spec.luau", "tests/crowd_spec.luau", "tests/proximity_grid_spec.luau", "tests/obstacle_avoidance_spec.luau", "tests/local_boundary_spec.luau", "tests/path_corridor_spec.luau", "tests/path_queue_spec.luau", "tests/tilecache_spec.luau", "tests/navmesh_spec.luau", "tests/navmesh_builder_spec.luau", "tests/bv_tree_order_spec.luau", "tests/tiled_navmesh_spec.luau"]
+tests = ["tests/recast_spec.luau", "tests/detour_spec.luau", "tests/crowd_spec.luau", "tests/proximity_grid_spec.luau", "tests/obstacle_avoidance_spec.luau", "tests/local_boundary_spec.luau", "tests/path_corridor_spec.luau", "tests/path_queue_spec.luau", "tests/tilecache_spec.luau", "tests/navmesh_spec.luau", "tests/navmesh_builder_spec.luau", "tests/bv_tree_order_spec.luau", "tests/detail_mesh_spec.luau", "tests/tiled_navmesh_spec.luau"]
 
 [modules]
 "@recast/common" = "src/common.luau"
