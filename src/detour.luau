@@ -317,7 +317,7 @@ local function buildPolyBounds(nav)
     for poly0 = 0, nav.polyCount - 1 do
         local nv = polyVertCount(nav, poly0)
         if nv > 0 then
-            local v = vertexAt(nav.vertices, polyVertexIndex(nav, poly0, 0))
+            local v: vector = vertexAt(nav.vertices, polyVertexIndex(nav, poly0, 0))
             local minx, miny, minz = v.X, v.Y, v.Z
             local maxx, maxy, maxz = minx, miny, minz
             for edge0 = 1, nv - 1 do
@@ -385,17 +385,17 @@ local function buildBVTree(nav, cellSize)
     local mins,maxs=table.create(groundCount),table.create(groundCount)
     local bounds = nav.polyBounds or buildPolyBounds(nav)
     local ni=0
-    local rootMin,rootMax=vector.create(0xffff,0xffff,0xffff),vector.zero
+    local rootMin: vector,rootMax: vector=vector.create(0xffff,0xffff,0xffff),vector.zero
     for poly0 = 0, nav.polyCount - 1 do
         if polyType(nav,poly0)~=Detour.DT_POLYTYPE_GROUND then continue end
         local o = poly0 * 24
         ni+=1
         order[ni]=ni; polyIds[ni]=poly0
-        local mn=vector.create(
+        local mn: vector=vector.create(
             math.clamp(math.floor((buffer.readf32(bounds,o)-nav.bmin.X)*qfac),0,0xffff),
             math.clamp(math.floor((buffer.readf32(bounds,o+4)-nav.bmin.Y)*qfac),0,0xffff),
             math.clamp(math.floor((buffer.readf32(bounds,o+8)-nav.bmin.Z)*qfac),0,0xffff))
-        local mx=vector.create(
+        local mx: vector=vector.create(
             math.clamp(math.ceil((buffer.readf32(bounds,o+12)-nav.bmin.X)*qfac),0,0xffff),
             math.clamp(math.ceil((buffer.readf32(bounds,o+16)-nav.bmin.Y)*qfac),0,0xffff),
             math.clamp(math.ceil((buffer.readf32(bounds,o+20)-nav.bmin.Z)*qfac),0,0xffff))
@@ -410,21 +410,21 @@ local function buildBVTree(nav, cellSize)
         local icur = curNode
         curNode += 1
         if inum == 1 then
-            local id=order[imin]; local mn,mx=mins[id],maxs[id]
+            local id=order[imin]; local mn: vector,mx: vector=mins[id],maxs[id]
             bvWriteNode(nodes,icur,mn.X,mn.Y,mn.Z,mx.X,mx.Y,mx.Z,polyIds[id])
             return
         end
-        local ext=bmax-bmin
+        local ext: vector=bmax-bmin
         local axis=if ext.Y>ext.X and ext.Y>=ext.Z then 2 elseif ext.Z>ext.X and ext.Z>ext.Y then 3 else 1
         local amin,amax
         if axis==1 then amin,amax=bmin.X,bmax.X elseif axis==2 then amin,amax=bmin.Y,bmax.Y else amin,amax=bmin.Z,bmax.Z end
         local threshold = (amin + amax + 1) // 2
 
         local l,r=imin,imax-1
-        local lmin,lmax=vector.create(0xffff,0xffff,0xffff),vector.zero
-        local rmin,rmax=vector.create(0xffff,0xffff,0xffff),vector.zero
+        local lmin: vector,lmax: vector=vector.create(0xffff,0xffff,0xffff),vector.zero
+        local rmin: vector,rmax: vector=vector.create(0xffff,0xffff,0xffff),vector.zero
         for i=imin,imax-1 do
-            local id=order[i]; local mn,mx=mins[id],maxs[id]
+            local id=order[i]; local mn: vector,mx: vector=mins[id],maxs[id]
             local key=if axis==1 then mn.X elseif axis==2 then mn.Y else mn.Z
             if key < threshold then
                 scratch[l]=id; l+=1
@@ -543,14 +543,14 @@ end
 local function closestPointOnTriangle(p: vector, a: vector, b: vector, c: vector)
     -- Real-Time Collision Detection region tests, kept branchy on purpose: it avoids temporary
     -- tables and gives exact edge/vertex clamping for nearest-poly queries.
-    local ab = b - a
-    local ac = c - a
-    local ap = p - a
+    local ab: vector = b - a
+    local ac: vector = c - a
+    local ap: vector = p - a
     local d1 = vector.dot(ab, ap)
     local d2 = vector.dot(ac, ap)
     if d1 <= 0 and d2 <= 0 then return a end
 
-    local bp = p - b
+    local bp: vector = p - b
     local d3 = vector.dot(ab, bp)
     local d4 = vector.dot(ac, bp)
     if d3 >= 0 and d4 <= d3 then return b end
@@ -561,7 +561,7 @@ local function closestPointOnTriangle(p: vector, a: vector, b: vector, c: vector
         return a + ab * v
     end
 
-    local cp = p - c
+    local cp: vector = p - c
     local d5 = vector.dot(ab, cp)
     local d6 = vector.dot(ac, cp)
     if d6 >= 0 and d5 <= d6 then return c end
@@ -590,7 +590,7 @@ local function closestPointSeg2D(p: vector, a: vector, b: vector)
     local t = 0
     if denom > 0 then t = ((p.X - a.X) * dx + (p.Z - a.Z) * dz) / denom end
     t = math.clamp(t, 0, 1)
-    local q = a + (b - a) * t
+    local q: vector = a + (b - a) * t
     local qx, qz = p.X - q.X, p.Z - q.Z
     return q, qx * qx + qz * qz, t
 end
@@ -627,8 +627,8 @@ local function pointInPolyXZ(nav, poly0, p: vector)
     local nv = polyVertCount(nav, poly0)
     local j = nv - 1
     for i = 0, nv - 1 do
-        local vi = vertexAt(nav.vertices, polyVertexIndex(nav, poly0, i))
-        local vj = vertexAt(nav.vertices, polyVertexIndex(nav, poly0, j))
+        local vi: vector = vertexAt(nav.vertices, polyVertexIndex(nav, poly0, i))
+        local vj: vector = vertexAt(nav.vertices, polyVertexIndex(nav, poly0, j))
         if (vi.Z > p.Z) ~= (vj.Z > p.Z) then
             local x = (vj.X - vi.X) * (p.Z - vi.Z) / (vj.Z - vi.Z) + vi.X
             if p.X < x then inside = not inside end
@@ -727,8 +727,8 @@ function Detour.getPolyHeight(nav, ref, position)
     local poly0 = refToPoly0(nav, ref)
     if not isWalkable(nav, poly0) then return nil end
     if polyType(nav, poly0) == Detour.DT_POLYTYPE_OFFMESH_CONNECTION then
-        local a=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,0))
-        local b=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,1))
+        local a: vector=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,0))
+        local b: vector=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,1))
         local _,_,t=closestPointSeg2D(position,a,b)
         return a.Y+(b.Y-a.Y)*t
     end
@@ -773,7 +773,7 @@ function Detour.isValidPolyRef(nav, ref, filter)
 end
 
 function Detour.queryPolygons(nav, center, halfExtents, filter)
-    local qmin, qmax = center - halfExtents, center + halfExtents
+    local qmin: vector, qmax: vector = center - halfExtents, center + halfExtents
     local out = {}
     if nav._tiled and nav.tileWidth>0 and nav.tileHeight>0 then
         local minx=math.floor((qmin.X-nav.orig.X)/nav.tileWidth); local maxx=math.floor((qmax.X-nav.orig.X)/nav.tileWidth)
@@ -1238,7 +1238,7 @@ local function portalBetween(nav, fromRef, toRef)
     if edge < 0 then return nil end
     local ia = polyVertexIndex(nav, from0, edge)
     local ib = polyVertexIndex(nav, from0, (edge + 1) % nv)
-    local va, vb = vertexAt(nav.vertices, ia), vertexAt(nav.vertices, ib)
+    local va: vector, vb = vertexAt(nav.vertices, ia), vertexAt(nav.vertices, ib)
     if portalLink>=0 and extraLinkSide(nav,portalLink)~=0xff then
         local t0,t1=extraLinkBMin(nav,portalLink)/255,extraLinkBMax(nav,portalLink)/255
         local delta=vb-va
@@ -1247,7 +1247,7 @@ local function portalBetween(nav, fromRef, toRef)
         local oa,ob=vertexAt(nav.vertices,ia),vertexAt(nav.vertices,ib); local od=ob-oa
         va=oa+od*t0; vb=oa+od*t1
     end
-    local fromCenter, toCenter = polyCenter(nav, from0), polyCenter(nav, to0)
+    local fromCenter: vector, toCenter: vector = polyCenter(nav, from0), polyCenter(nav, to0)
     local dx, dz = toCenter.X - fromCenter.X, toCenter.Z - fromCenter.Z
     local ax, az = va.X - fromCenter.X, va.Z - fromCenter.Z
     local side = dx * az - dz * ax
@@ -1301,7 +1301,7 @@ local function inwardEdgeNormal(nav, poly0, edge0, a: vector, b: vector)
     local ex, ez = b.X - a.X, b.Z - a.Z
     local len = math.sqrt(ex * ex + ez * ez)
     if len <= 1e-8 then return vector.zero end
-    local n = vector.create(ez / len, 0, -ex / len)
+    local n: vector = vector.create(ez / len, 0, -ex / len)
     local mid = (a + b) * 0.5
     local center = polyCenter(nav, poly0)
     if vector.dot(n, center - mid) < 0 then n = -n end
@@ -1483,10 +1483,10 @@ function Detour.updateSlicedFindPath(nav, maxIter)
 
         local parent0 = state.parent[current]
         local grandpa0 = if parent0 ~= nil and parent0 >= 0 then state.parent[parent0] else -1
-        local currentPos = state.pos[current]
+        local currentPos: vector = state.pos[current]
         local tryLOS = false
         if bit32.band(state.options, Detour.DT_FINDPATH_ANY_ANGLE) ~= 0 and parent0 ~= nil and parent0 >= 0 then
-            local parentPos = state.pos[parent0]
+            local parentPos: vector = state.pos[parent0]
             local dx,dy,dz = parentPos.X-currentPos.X,parentPos.Y-currentPos.Y,parentPos.Z-currentPos.Z
             tryLOS = dx*dx+dy*dy+dz*dz < state.raycastLimitSqr
         end
@@ -1616,7 +1616,7 @@ function Detour.findPathPositioned(nav,startRef,endRef,startPos,endPos,filter,ma
         if current==end0 then lastBest=current;break end
 
         local currentRef=poly0ToRef(nav,current)
-        local currentPos=readVec3f(pos,current+1)
+        local currentPos: vector=readVec3f(pos,current+1)
         local parent0=buffer.readi32(parent,current*4)
         local currentCost=buffer.readf64(g,current*8)
         local nv=polyVertCount(nav,current)
@@ -1681,7 +1681,7 @@ local function pointInVertexPolyXZ(vertices, p: vector)
     local inside = false
     local j = #vertices
     for i = 1, #vertices do
-        local vi, vj = vertices[i], vertices[j]
+        local vi: vector, vj: vector = vertices[i], vertices[j]
         if (vi.Z > p.Z) ~= (vj.Z > p.Z) then
             local x = (vj.X - vi.X) * (p.Z - vi.Z) / (vj.Z - vi.Z) + vi.X
             if p.X < x then inside = not inside end
@@ -1870,7 +1870,7 @@ function Detour.findDistanceToWall(nav, startRef, centerPos, maxRadius, filter)
 
     if bestPos == nil then return maxRadius, nil, nil end
     local dist = math.sqrt(bestDist2)
-    local delta = centerPos - bestPos
+    local delta: vector = centerPos - bestPos
     local horizontal = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
     local normal = if horizontal > 1e-8 then vector.create(delta.X / horizontal, 0, delta.Z / horizontal) else vector.zero
     return dist, bestPos, normal
@@ -3213,7 +3213,7 @@ local function connectTiledExternalOffMesh(nav,sourceTile,landingTile)
         if buffer.readi32(src.offMeshConnections,so+16)<0 then continue end
         local sourcePoly=sourceTile.polyBase+localPoly
         local localVertex=polyVertexIndex(src,localPoly,1)
-        local endpoint=vertexAt(src.vertices,localVertex)
+        local endpoint: vector=vertexAt(src.vertices,localVertex)
         local radius=buffer.readf32(src.offMeshConnections,so+4)
         local ext=vector.create(radius,math.max(src.walkableClimb or 0,0.001),radius)
         local landingRefLocal,nearest=Detour.findNearestPoly(landingTile.nav,endpoint,ext,nil)

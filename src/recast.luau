@@ -139,11 +139,11 @@ end
 function Recast.calcBounds(vertices)
     local packed, count = Common.packVertices(vertices)
     if count == 0 then error('calcBounds needs at least one vertex', 2) end
-    local first = vertexAt(packed, 0)
+    local first: vector = vertexAt(packed, 0)
     local minx, miny, minz = first.X, first.Y, first.Z
     local maxx, maxy, maxz = minx, miny, minz
     for i = 1, count - 1 do
-        local v = vertexAt(packed, i)
+        local v: vector = vertexAt(packed, i)
         if v.X < minx then minx = v.X end
         if v.Y < miny then miny = v.Y end
         if v.Z < minz then minz = v.Z end
@@ -307,12 +307,12 @@ local function newRasterScratch()
 end
 
 local function rasterizeTri(v0: vector, v1: vector, v2: vector, area, hf, flagMergeThreshold, scratch)
-    local triMin = vector.create(
+    local triMin: vector = vector.create(
         math.min(v0.X, v1.X, v2.X),
         math.min(v0.Y, v1.Y, v2.Y),
         math.min(v0.Z, v1.Z, v2.Z)
     )
-    local triMax = vector.create(
+    local triMax: vector = vector.create(
         math.max(v0.X, v1.X, v2.X),
         math.max(v0.Y, v1.Y, v2.Y),
         math.max(v0.Z, v1.Z, v2.Z)
@@ -330,7 +330,7 @@ local function rasterizeTri(v0: vector, v1: vector, v2: vector, area, hf, flagMe
     local rem = scratch.inputB
     input[1], input[2], input[3] = v0, v1, v2
     local inputCount = 3
-    local row = scratch.row
+    local row: { vector } = scratch.row
     local col = scratch.col
     local colRem = scratch.colRem
 
@@ -355,7 +355,7 @@ local function rasterizeTri(v0: vector, v1: vector, v2: vector, area, hf, flagMe
 
         local inRow = row
         local inRowCount = rowCount
-        local p1 = col
+        local p1: { vector } = col
         local p2 = colRem
         for x = x0, x1 do
             local cellX = hf.bmin.X + x * hf.cs
@@ -410,9 +410,9 @@ function Recast.rasterizeTriangles(vertices, triangles, areas, hf, flagMergeThre
 end
 
 local function triNormal(a, b, c)
-    local e0 = b - a
-    local e1 = c - a
-    local cross = vector.cross(e0, e1)
+    local e0: vector = b - a
+    local e1: vector = c - a
+    local cross: vector = vector.cross(e0, e1)
     local mag = vector.magnitude(cross)
     if mag <= 1e-20 then return vector.create(0, 0, 0) end
     return cross / mag
@@ -428,7 +428,7 @@ function Recast.markWalkableTriangles(walkableSlopeAngle, vertices, triangles, a
     local threshold = math.cos(walkableSlopeAngle / 180 * Recast.RC_PI)
     for i = 0, count - 1 do
         local ia, ib, ic = triangleAt(tris, i)
-        local n = triNormal(vertexAt(verts, ia), vertexAt(verts, ib), vertexAt(verts, ic))
+        local n: vector = triNormal(vertexAt(verts, ia), vertexAt(verts, ib), vertexAt(verts, ic))
         if n.Y > threshold then buffer.writeu8(out, i, RC_WALKABLE_AREA) end
     end
     return out
@@ -449,7 +449,7 @@ function Recast.rasterizeWalkableTriangles(walkableSlopeAngle, vertices, triangl
         local a, b, c = vertexAt(verts, ia), vertexAt(verts, ib), vertexAt(verts, ic)
         local area = buffer.readu8(out, i)
         if areas == nil or area == RC_NULL_AREA then
-            local n = triNormal(a, b, c)
+            local n: vector = triNormal(a, b, c)
             if n.Y > threshold then
                 area = RC_WALKABLE_AREA
                 buffer.writeu8(out, i, area)
@@ -473,7 +473,7 @@ function Recast.clearUnwalkableTriangles(walkableSlopeAngle, vertices, triangles
     local threshold = math.cos(walkableSlopeAngle / 180 * Recast.RC_PI)
     for i = 0, count - 1 do
         local ia, ib, ic = triangleAt(tris, i)
-        local n = triNormal(vertexAt(verts, ia), vertexAt(verts, ib), vertexAt(verts, ic))
+        local n: vector = triNormal(vertexAt(verts, ia), vertexAt(verts, ib), vertexAt(verts, ic))
         if n.Y <= threshold then buffer.writeu8(out, i, RC_NULL_AREA) end
     end
     return out
@@ -926,7 +926,7 @@ local function pointInPolyXZ(vertices, point: vector)
     local n = #vertices
     local j = n
     for i = 1, n do
-        local vi, vj = vertices[i], vertices[j]
+        local vi: vector, vj: vector = vertices[i], vertices[j]
         if (vi.Z > point.Z) ~= (vj.Z > point.Z) then
             local crossX = (vj.X - vi.X) * (point.Z - vi.Z) / (vj.Z - vi.Z) + vi.X
             if point.X < crossX then inside = not inside end
@@ -947,12 +947,12 @@ local function unpackVertexList(vertices)
 end
 
 function Recast.markConvexPolyArea(vertices, minYWorld, maxYWorld, areaId, chf)
-    local verts = unpackVertexList(vertices)
+    local verts: { vector } = unpackVertexList(vertices)
     if #verts < 3 then return chf end
     local minXWorld, maxXWorld = verts[1].X, verts[1].X
     local minZWorld, maxZWorld = verts[1].Z, verts[1].Z
     for i = 2, #verts do
-        local v = verts[i]
+        local v: vector = verts[i]
         minXWorld = math.min(minXWorld, v.X); maxXWorld = math.max(maxXWorld, v.X)
         minZWorld = math.min(minZWorld, v.Z); maxZWorld = math.max(maxZWorld, v.Z)
     end
@@ -1025,9 +1025,9 @@ function Recast.offsetPoly(vertices, offset, maxOutVerts)
     local out = {}
     local miterLimit = 1.20
     for i = 1, n do
-        local a = verts[((i - 2) % n) + 1]
-        local b = verts[i]
-        local c = verts[(i % n) + 1]
+        local a: vector = verts[((i - 2) % n) + 1]
+        local b: vector = verts[i]
+        local c: vector = verts[(i % n) + 1]
         local prevX, prevZ = b.X - a.X, b.Z - a.Z
         local currX, currZ = c.X - b.X, c.Z - b.Z
         local prevMag = prevX * prevX + prevZ * prevZ
@@ -2143,7 +2143,7 @@ function Recast.mergePolyMeshes(meshes)
     if meshes == nil or #meshes == 0 then return nil end
     local first = meshes[1]
     local nvp, cs, ch = first.nvp, first.cs, first.ch
-    local bmin, bmax = first.bmin, first.bmax
+    local bmin: vector, bmax: vector = first.bmin, first.bmax
     local maxVerts, maxPolys = 0, 0
     for _, src in meshes do
         if src.nvp ~= nvp then error('all polymeshes must use the same nvp', 2) end
@@ -3267,8 +3267,8 @@ function Recast.buildHeightfieldLayers(chf, borderSize, walkableHeight)
     if compactCount == 0 then return {nlayers = 0, layers = {}} end
 
     local lw, lh = w - borderSize * 2, h - borderSize * 2
-    local baseMin = vector.create(chf.bmin.X + borderSize * chf.cs, chf.bmin.Y, chf.bmin.Z + borderSize * chf.cs)
-    local baseMax = vector.create(chf.bmax.X - borderSize * chf.cs, chf.bmax.Y, chf.bmax.Z - borderSize * chf.cs)
+    local baseMin: vector = vector.create(chf.bmin.X + borderSize * chf.cs, chf.bmin.Y, chf.bmin.Z + borderSize * chf.cs)
+    local baseMax: vector = vector.create(chf.bmax.X - borderSize * chf.cs, chf.bmax.Y, chf.bmax.Z - borderSize * chf.cs)
     local layers = table.create(compactCount)
     for curId = 0, compactCount - 1 do
         local hmin, hmax = 0, 0
