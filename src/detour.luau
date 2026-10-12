@@ -6,6 +6,7 @@
 
 local Common = require('@recast/common')
 local Recast = require('@recast/core')
+local data = require '@dream/data'
 
 local function vertexAt(vertices, index0)
     local o = index0 * 12
@@ -62,7 +63,7 @@ function Detour.statusDetail(status, detail) return bit32.band(status, detail) ~
 function Detour.newQueryFilter(options)
     options = options or {}
     local costs = buffer.create(Detour.DT_MAX_AREAS * 4)
-    for area = 0, Detour.DT_MAX_AREAS - 1 do buffer.writef32(costs, area * 4, 1) end
+    data.fill(costs, 'f32', 0, Detour.DT_MAX_AREAS, 1)
     local filter = {
         includeFlags = options.includeFlags or 0xffff,
         excludeFlags = options.excludeFlags or 0,
@@ -488,7 +489,7 @@ function Detour.buildTriangleNavMesh(vertices, triangles, options)
     local polyTypes = buffer.create(triCount)
     local polyValid = buffer.create(triCount)
 
-    for i = 0, triCount * 3 - 1 do buffer.writei32(neighbors, i * 4, -1) end
+    buffer.fill(neighbors, 0, 0xff)
 
     local vkeys = table.create(vertCount)
     for i = 0, vertCount - 1 do vkeys[i + 1] = vertexKey(vertexAt(verts, i)) end
@@ -813,10 +814,14 @@ function Detour.queryPolygons(nav, center, halfExtents, filter)
         end
         return out
     end
-    for poly0 = 0, nav.polyCount - 1 do
-        if polyType(nav, poly0) == Detour.DT_POLYTYPE_GROUND and passFilter(nav, poly0, filter) and boundsOverlap(nav, poly0, qmin, qmax) then out[#out + 1] = poly0ToRef(nav,poly0) end
-    end
-    return out
+
+    return [
+      for polygon in range(0, nav.polyCount - 1)
+      if polyType(nav, polygon) == Detour.DT_POLYTYPE_GROUND
+        and passFilter(nav, polygon, filter)
+        and boundsOverlap(nav, polygon, qmin, qmax)
+      => poly0ToRef(nav, polygon)
+    ]
 end
 
 local function nearestCandidate(nav, position: vector, extents, tri0, bestRef, bestPoint, bestDistance, filter)
@@ -2466,12 +2471,9 @@ end
 
 function Detour.buildCompactNavMesh(chf)
     local spanToBase = buffer.create(chf.spanCount * 4)
-    for i = 0, chf.spanCount - 1 do buffer.writei32(spanToBase, i * 4, -1) end
+    buffer.fill(spanToBase, 0, 0xff)
 
-    local walkableSpans = 0
-    for i = 0, chf.spanCount - 1 do
-        if buffer.readu8(chf.areas, i) ~= Recast.RC_NULL_AREA then walkableSpans += 1 end
-    end
+    local walkableSpans = data.count(chf.areas, 'u8', 0, chf.spanCount, 'ne', Recast.RC_NULL_AREA)
 
     local vertexCount = walkableSpans * 4
     local polyCount = walkableSpans * 2
@@ -2486,8 +2488,8 @@ function Detour.buildCompactNavMesh(chf)
     local centers = buffer.create(polyCount * 12)
     local sourceSpan = buffer.create(polyCount * 4)
     local spanNeighbors = buffer.create(chf.spanCount * 4 * 4)
-    for i = 0, polyCount * 3 - 1 do buffer.writei32(neighbors, i * 4, -1) end
-    for i = 0, chf.spanCount * 4 - 1 do buffer.writei32(spanNeighbors, i * 4, -1) end
+    buffer.fill(neighbors, 0, 0xff)
+    buffer.fill(spanNeighbors, 0, 0xff)
 
     local nextSpanOrdinal = 0
     for z = 0, chf.height - 1 do

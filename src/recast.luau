@@ -162,7 +162,7 @@ function Recast.createHeightfield(width, height, bmin, bmax, cellSize, cellHeigh
     if width < 0 or height < 0 then error('heightfield dimensions must be non-negative', 2) end
     local cells = width * height
     local heads = buffer.create(cells * 4)
-    for i = 0, cells - 1 do buffer.writei32(heads, i * 4, -1) end
+    buffer.fill(heads, 0, 0xff)
     local capacity = math.max(64, math.min(math.max(cells, 64), 4096))
     return {
         width = width,
@@ -727,7 +727,7 @@ end
 function Recast.erodeWalkableArea(erosionRadius, chf)
     if erosionRadius <= 0 then return true end
     local dist = buffer.create(chf.spanCount)
-    for i = 0, chf.spanCount - 1 do buffer.writeu8(dist, i, 0xff) end
+    buffer.fill(dist, 0, 0xff)
 
     -- Boundary spans are zero distance from an obstacle or missing connection.
     for z = 0, chf.height - 1 do
@@ -1061,7 +1061,7 @@ end
 function Recast.buildDistanceField(chf)
     local src = buffer.create(chf.spanCount * 2)
     local dst = buffer.create(chf.spanCount * 2)
-    for i = 0, chf.spanCount - 1 do buffer.writeu16(src, i * 2, 0xffff) end
+    buffer.fill(src, 0, 0xff)
 
     local w, h = chf.width, chf.height
     for z = 0, h - 1 do
@@ -2556,8 +2556,8 @@ local function mergeAndFilterRegions(minRegionArea, mergeRegionArea, maxRegionId
             buffer.writeu16(srcReg, span * 2, regions[rid + 1].id)
         end
     end
-    local overlaps = {}
-    for i = 0, maxRegionId do if regions[i + 1].overlap then overlaps[#overlaps + 1] = regions[i + 1].id end end
+    local overlaps = [for index in range(1, maxRegionId + 1) if regions[index].overlap => regions[index].id]
+
     return generated, overlaps
 end
 

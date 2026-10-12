@@ -688,7 +688,8 @@ function Detail.buildPolyMeshDetail(mesh,chf,sampleDist,sampleMaxError)
     local meshes=buffer.create(#meshRecords*16); local verts=buffer.create(#allVerts*12); local tris=buffer.create(#allTris)
     for i0=0,#meshRecords-1 do local r=meshRecords[i0+1]; local o=i0*16; for k=1,4 do buffer.writeu32(meshes,o+(k-1)*4,r[k]) end end
     for i0=0,#allVerts-1 do writeVec3f(verts,i0+1,allVerts[i0+1]) end
-    for i=1,#allTris do buffer.writeu8(tris,i-1,allTris[i]) end
+    into(tris, 'u8')[for value in allTris => value]
+
     return {meshes=meshes,verts=verts,tris=tris,nmeshes=#meshRecords,nverts=#allVerts,ntris=#allTris//4}
 end
 
