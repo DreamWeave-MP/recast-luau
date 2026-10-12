@@ -2,7 +2,7 @@
 
 A **pure-Luau RecastNavigation / Detour port** for Jess. The target is 1:1 observable behavior where the upstream behavior is meaningful in Luau, while keeping the runtime free of a Recast C/C++ ABI, Rust shim, FFI bridge, or privileged engine implementation.
 
-Runtime source is Luau and leans heavily on Jess/L3i's `buffer`, native `vector`, bit operations, and `--!native` compilation. `--!native` compiles Luau; it is not a native Recast dependency.
+Runtime source is Luau and leans heavily on Jess/L3i's `buffer`, native `vector`, bit operations, and `--!native` compilation, and on l3i's bulk-data plane (`@dream/data`) for the one sort whose order is part of a tile's bytes. `--!native` compiles Luau; it is not a native Recast dependency, and neither is the data plane: it knows numbers in buffers, not navmeshes.
 
 Package: `org.dreamweave.recast`  
 Primary import: `@recast`
@@ -90,14 +90,9 @@ qb:initSlicedFindPath(b0, b1, bpos0, bpos1, filter)
 
 The port is intentionally profiler-driven. Several tempting “runtime primitive” ideas were rejected after better Luau layout/algorithm choices solved them.
 
-Current representative runs in this environment:
+`BENCHMARKS.md` has the current numbers, from `bench/bench.luau`, and what moved them. The runs below are older, from the standalone stress scripts in `bench/`, and are kept for the shapes they show:
 
 ```text
-Exact serialized BV build, 64,516 polys:
-  no BV     ~34.5 ms
-  with BV  ~299.5 ms
-  BV delta ~265.0 ms
-
 Runtime BV query, 16,384 polys:
   10,000 box queries ~77.6 ms
 
@@ -114,7 +109,7 @@ TileCache:
 
 Numbers are workload/machine dependent; use them as relative baselines, not promises.
 
-One L3i optimization candidate **did** survive the full elimination process: a stable numeric-key permutation/argsort primitive for the exact serialized Detour BV builder. The complete evidence, rejected alternatives, semantics, and Claude handoff are in `docs/L3I_OPTIMIZATION_REPORT.md`. Reproduce it with:
+One L3i optimization candidate **did** survive the full elimination process: a stable numeric-key permutation/argsort primitive for the exact serialized Detour BV builder. l3i 2.0 ships it as `@dream/data`'s `argsort`, and the builder sorts with it; the evidence that asked for it, the rejected alternatives, and the handoff are in `docs/L3I_OPTIMIZATION_REPORT.md`. Its workload is still here:
 
 ```sh
 jess run --package . ./bench/navdata_bv_stress.luau 254
