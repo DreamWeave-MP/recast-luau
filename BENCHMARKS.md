@@ -1,6 +1,6 @@
 # recast-luau benchmarks
 
-`bench/bench.luau` times the package through its public API: Detour tiles serialized with and
+`bench/bench.jsl` times the package through its public API: Detour tiles serialized with and
 without their BV tree, the Recast build with and without a sampled detail mesh, rasterization,
 the runtime navmesh and its box and nearest-polygon queries, paths, the crowd, the tile cache, and
 tiled navmeshes. Its inputs are made in the file: grids of unit quads wired to their neighbours
@@ -11,7 +11,7 @@ batches, with a full collection between them. Every workload's result is checked
 its SHA-256, everything else against a count or a checksum.
 
 ```sh
-jess run --package jpk/recast-luau jpk/recast-luau/bench/bench.luau [filter]
+jess run --package jpk/recast-luau jpk/recast-luau/bench/bench.jsl [filter]
 ```
 
 ## The move onto l3i 2.0, base against head
@@ -101,7 +101,7 @@ comprehensions and a buffer sink, nine fill and count loops became `buffer.fill`
 
 ## The workload l3i's argsort was added for
 
-`docs/L3I_OPTIMIZATION_REPORT.md` measured `bench/navdata_bv_stress.luau`, and its numbers are the
+`docs/L3I_OPTIMIZATION_REPORT.md` measured `bench/navdata_bv_stress.jsl`, and its numbers are the
 reason l3i 2.0 has a stable `argsort` with caller scratch. The same script, same binary, base
 against head, best of five:
 

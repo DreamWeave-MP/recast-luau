@@ -5,23 +5,23 @@ id = "org.dreamweave.recast"
 version = "0.2.0"
 jess_api = "1"
 include = ["src", "examples", "bench", "tests", "RECAST-LICENSE.txt", "README.md"]
-tests = ["tests/recast_spec.luau", "tests/detour_spec.luau", "tests/crowd_spec.luau", "tests/proximity_grid_spec.luau", "tests/obstacle_avoidance_spec.luau", "tests/local_boundary_spec.luau", "tests/path_corridor_spec.luau", "tests/path_queue_spec.luau", "tests/tilecache_spec.luau", "tests/navmesh_spec.luau", "tests/navmesh_builder_spec.luau", "tests/bv_tree_order_spec.luau", "tests/detail_mesh_spec.luau", "tests/tiled_navmesh_spec.luau", "tests/tile_writer_spec.luau", "tests/compact_navmesh_spec.luau", "tests/query_filter_spec.luau", "tests/region_overlap_spec.luau"]
+tests = ["tests/recast_spec.jsl", "tests/detour_spec.jsl", "tests/crowd_spec.jsl", "tests/proximity_grid_spec.jsl", "tests/obstacle_avoidance_spec.jsl", "tests/local_boundary_spec.jsl", "tests/path_corridor_spec.jsl", "tests/path_queue_spec.jsl", "tests/tilecache_spec.jsl", "tests/navmesh_spec.jsl", "tests/navmesh_builder_spec.jsl", "tests/bv_tree_order_spec.jsl", "tests/detail_mesh_spec.jsl", "tests/tiled_navmesh_spec.jsl", "tests/tile_writer_spec.jsl", "tests/compact_navmesh_spec.jsl", "tests/query_filter_spec.jsl", "tests/region_overlap_spec.jsl"]
 
 [modules]
-"@recast/common" = "src/common.luau"
-"@recast/core" = "src/recast.luau"
-"@recast/detour" = "src/detour.luau"
-"@recast/detail" = "src/detail.luau"
-"@recast/crowd" = "src/crowd.luau"
-"@recast/proximity-grid" = "src/proximity_grid.luau"
-"@recast/obstacle-avoidance" = "src/obstacle_avoidance.luau"
-"@recast/local-boundary" = "src/local_boundary.luau"
-"@recast/path-corridor" = "src/path_corridor.luau"
-"@recast/path-queue" = "src/path_queue.luau"
-"@recast/tilecache" = "src/tilecache.luau"
-"@recast/navmesh" = "src/navmesh.luau"
-"@recast/navmesh-builder" = "src/navmesh_builder.luau"
-"@recast" = "src/init.luau"
+"@recast/common" = "src/common.jsl"
+"@recast/core" = "src/recast.jsl"
+"@recast/detour" = "src/detour.jsl"
+"@recast/detail" = "src/detail.jsl"
+"@recast/crowd" = "src/crowd.jsl"
+"@recast/proximity-grid" = "src/proximity_grid.jsl"
+"@recast/obstacle-avoidance" = "src/obstacle_avoidance.jsl"
+"@recast/local-boundary" = "src/local_boundary.jsl"
+"@recast/path-corridor" = "src/path_corridor.jsl"
+"@recast/path-queue" = "src/path_queue.jsl"
+"@recast/tilecache" = "src/tilecache.jsl"
+"@recast/navmesh" = "src/navmesh.jsl"
+"@recast/navmesh-builder" = "src/navmesh_builder.jsl"
+"@recast" = "src/init.jsl"
 
 [[layer]]
 id = "org.dreamweave.recast"

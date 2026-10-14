@@ -2,7 +2,7 @@
 --!native
 -- The Recast/Detour port, timed from Luau: Detour tile serialization with and without its BV
 -- tree, the Recast build pipeline, the runtime navmesh and its box queries, pathfinding, the
--- crowd, the tile cache, and tiled lookups. Run by `jess run --package . bench/bench.luau
+-- crowd, the tile cache, and tiled lookups. Run by `jess run --package . bench/bench.jsl
 -- [filter]`, on a release build. Prints one line per workload: its name, a tab, seconds per call.
 local builder = require '@recast/navmesh-builder'
 local bytes = require '@dream/bytes'
@@ -218,7 +218,7 @@ local function terrain(size: number): ({ vector }, { { number } })
   return vertices, triangles
 end
 
---- The maze of `bench/maze.luau`: walls every eight columns, open at alternating ends.
+--- The maze of `bench/maze.jsl`: walls every eight columns, open at alternating ends.
 local function maze(size: number): ({ vector }, { { number } })
   local side = size + 1
   local vertices: { vector } = table.create(side * side)

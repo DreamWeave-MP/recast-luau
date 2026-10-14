@@ -90,7 +90,7 @@ qb:initSlicedFindPath(b0, b1, bpos0, bpos1, filter)
 
 The port is intentionally profiler-driven. Several tempting “runtime primitive” ideas were rejected after better Luau layout/algorithm choices solved them.
 
-`BENCHMARKS.md` has the current numbers, from `bench/bench.luau`, and what moved them. The runs below are older, from the standalone stress scripts in `bench/`, and are kept for the shapes they show:
+`BENCHMARKS.md` has the current numbers, from `bench/bench.jsl`, and what moved them. The runs below are older, from the standalone stress scripts in `bench/`, and are kept for the shapes they show:
 
 ```text
 Runtime BV query, 16,384 polys:
@@ -112,8 +112,8 @@ Numbers are workload/machine dependent; use them as relative baselines, not prom
 One L3i optimization candidate **did** survive the full elimination process: a stable numeric-key permutation/argsort primitive for the exact serialized Detour BV builder. l3i 2.0 ships it as `@dream/data`'s `argsort`, and the builder sorts with it; the evidence that asked for it, the rejected alternatives, and the handoff are in `docs/L3I_OPTIMIZATION_REPORT.md`. Its workload is still here:
 
 ```sh
-jess run --package . ./bench/navdata_bv_stress.luau 254
-jess run --package . --profile ./bench/navdata_bv_stress.luau 254
+jess run --package . ./bench/navdata_bv_stress.jsl 254
+jess run --package . --profile ./bench/navdata_bv_stress.jsl 254
 ```
 
 ## Testing

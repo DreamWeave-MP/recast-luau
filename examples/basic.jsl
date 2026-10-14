@@ -1,5 +1,5 @@
 -- Run with:
---   jess run --package /path/to/recast-luau.jpk examples/basic.luau
+--   jess run --package /path/to/recast-luau.jpk examples/basic.jsl
 
 local recast = require('@recast')
 local dt = recast.Detour
