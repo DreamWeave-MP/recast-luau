@@ -12,14 +12,17 @@ local function vertexAt(vertices, index0)
     local o = index0 * 12
     return vector.create(buffer.readf32(vertices,o), buffer.readf32(vertices,o+4), buffer.readf32(vertices,o+8))
 end
+
 local function triangleAt(triangles, tri0)
     local o = tri0 * 12
     return buffer.readu32(triangles,o), buffer.readu32(triangles,o+4), buffer.readu32(triangles,o+8)
 end
+
 local function readVec3f(source, index1)
     local o = (index1 - 1) * 12
     return vector.create(buffer.readf32(source,o), buffer.readf32(source,o+4), buffer.readf32(source,o+8))
 end
+
 local function writeVec3f(target, index1, v: vector)
     local o = (index1 - 1) * 12
     buffer.writef32(target,o,v.X); buffer.writef32(target,o+4,v.Y); buffer.writef32(target,o+8,v.Z)
@@ -70,6 +73,7 @@ function Detour.newQueryFilter(options)
         areaCosts = costs,
         minAreaCost = 1,
     }
+
     if options.areaCosts ~= nil then
         for area, cost in options.areaCosts do
             local index = if type(area) == 'number' then area else tonumber(area)
@@ -164,11 +168,13 @@ local function extraLinkTarget(nav, link0)
     end
     return buffer.readi32(nav.extraLinks,o)
 end
+
 local function extraLinkNext(nav, link0) return buffer.readi32(nav.extraLinks, link0 * EXTRA_LINK_BYTES + 4) end
 local function extraLinkEdge(nav, link0) return buffer.readu8(nav.extraLinks, link0 * EXTRA_LINK_BYTES + 8) end
 local function extraLinkSide(nav, link0) return buffer.readu8(nav.extraLinks, link0 * EXTRA_LINK_BYTES + 9) end
 local function extraLinkBMin(nav, link0) return buffer.readu8(nav.extraLinks, link0 * EXTRA_LINK_BYTES + 10) end
 local function extraLinkBMax(nav, link0) return buffer.readu8(nav.extraLinks, link0 * EXTRA_LINK_BYTES + 11) end
+
 local function firstExtraLink(nav, poly0)
     if nav.extraFirstLinks == nil then return -1 end
     return buffer.readi32(nav.extraFirstLinks, poly0 * 4)
@@ -700,12 +706,14 @@ end
 function Detour.closestPointOnPolyBoundary(nav, ref, position)
     local poly0 = refToPoly0(nav, ref)
     if not isWalkable(nav, poly0) then return nil end
+
     if polyType(nav, poly0) == Detour.DT_POLYTYPE_OFFMESH_CONNECTION then
         local a=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,0))
         local b=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,1))
         local q=closestPointSeg2D(position,a,b)
         return q
     end
+
     if pointInPolyXZ(nav, poly0, position) then return position end
     local nv = polyVertCount(nav, poly0)
     local best, bestDist = nil, math.huge
@@ -727,12 +735,14 @@ function Detour.getPolyHeight(nav, ref, position)
     end
     local poly0 = refToPoly0(nav, ref)
     if not isWalkable(nav, poly0) then return nil end
+
     if polyType(nav, poly0) == Detour.DT_POLYTYPE_OFFMESH_CONNECTION then
         local a: vector=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,0))
         local b: vector=vertexAt(nav.vertices,polyVertexIndex(nav,poly0,1))
         local _,_,t=closestPointSeg2D(position,a,b)
         return a.Y+(b.Y-a.Y)*t
     end
+
     if not pointInPolyXZ(nav, poly0, position) then return nil end
 
     local dm = nav.detailMesh
@@ -810,6 +820,7 @@ function Detour.queryPolygons(nav, center, halfExtents, filter)
             if leaf and overlap and passFilter(nav,index,filter) then
                 out[#out + 1] = poly0ToRef(nav,index)
             end
+
             if overlap or leaf then node0 += 1 else node0 += -index end
         end
         return out
@@ -826,6 +837,7 @@ end
 
 local function nearestCandidate(nav, position: vector, extents, tri0, bestRef, bestPoint, bestDistance, filter)
     if tri0 < 0 or tri0 >= nav.polyCount then return bestRef, bestPoint, bestDistance end
+
     if filter == nil then
         if not isWalkable(nav, tri0) then return bestRef, bestPoint, bestDistance end
     elseif not passFilter(nav, tri0, filter) then
@@ -839,6 +851,7 @@ local function nearestCandidate(nav, position: vector, extents, tri0, bestRef, b
     else
         point,over = Detour.closestPointOnPoly(nav, poly0ToRef(nav,tri0), position)
     end
+
     if point ~= nil then
         local ref=poly0ToRef(nav,tri0)
         local d
@@ -853,6 +866,7 @@ local function nearestCandidate(nav, position: vector, extents, tri0, bestRef, b
         else
             d=Common.distanceSquared(position,point)
         end
+
         if d < bestDistance then return ref, point, d end
     end
     return bestRef, bestPoint, bestDistance
@@ -898,6 +912,7 @@ local function nearestCompact(nav, position: vector, extents, filter)
             for x = x0, x1 do visitCell(x, z0); visitCell(x, z1) end
             for z = z0 + 1, z1 - 1 do visitCell(x0, z); visitCell(x1, z) end
         end
+
         if bestRef ~= nil then
             -- Any cell beyond this ring has at least roughly this much horizontal separation;
             -- keep expanding only while its lower bound can still beat the 3D candidate.
@@ -920,6 +935,7 @@ function Detour.findNearestPoly(nav, position, extents, filter)
         end
         return bestRef, bestPoint, bestDistance
     end
+
     for tri0 = 0, nav.polyCount - 1 do
         bestRef, bestPoint, bestDistance = nearestCandidate(nav, position, extents, tri0, bestRef, bestPoint, bestDistance, filter)
     end
@@ -934,6 +950,7 @@ local function reconstruct(nav, parent, start0, end0)
         if current == start0 then break end
         current = buffer.readi32(parent, current * 4)
     end
+
     if reverse[#reverse] ~= poly0ToRef(nav,start0) then return nil end
     local path = table.create(#reverse)
     for i = 1, #reverse do path[i] = reverse[#reverse - i + 1] end
@@ -1017,6 +1034,7 @@ local function compactSpanPath(nav, startSpan, endSpan, filter)
         local current = Common.scoreHeapPop(scratch.heap)
         if current == nil then return nil end
         if buffer.readu32(seen, current * 4) ~= generation or buffer.readu8(state, current) == 2 then continue end
+
         if current == endSpan then
             local reverse = {}
             local span = endSpan
@@ -1025,6 +1043,7 @@ local function compactSpanPath(nav, startSpan, endSpan, filter)
                 if span == startSpan then break end
                 span = buffer.readi32(parent, span * 4)
             end
+
             if reverse[#reverse] ~= startSpan then return nil end
             local path = table.create(#reverse)
             for i = 1, #reverse do path[i] = reverse[#reverse - i + 1] end
@@ -1039,11 +1058,13 @@ local function compactSpanPath(nav, startSpan, endSpan, filter)
             local currentBase = buffer.readi32(nav.spanToBase, current * 4)
             currentAreaCost = buffer.readf32(filter.areaCosts, buffer.readu8(nav.areas, currentBase) * 4)
         end
+
         for dir0 = 0, 3 do
             local neighbor = buffer.readi32(nav.spanNeighbors, (current * 4 + dir0) * 4)
             if neighbor < 0 then continue end
             local wasSeen = buffer.readu32(seen, neighbor * 4) == generation
             if wasSeen and buffer.readu8(state, neighbor) == 2 then continue end
+
             if hasFilter then
                 local neighborBase = buffer.readi32(nav.spanToBase, neighbor * 4)
                 if neighborBase < 0 or not passFilter(nav, neighborBase, filter) then continue end
@@ -1107,6 +1128,7 @@ local function compactCorridor(nav, startRef, endRef, filter)
             currentRef = enterRef
         end
     end
+
     if currentRef ~= endRef then corridor[#corridor + 1] = endRef end
     return corridor
 end
@@ -1124,7 +1146,9 @@ function Detour.findPath(nav, startRef, endRef, filter, endPos, positionedFilter
     elseif not passFilter(nav, start0, filter) or not passFilter(nav, end0, filter) then
         return nil
     end
+
     if start0 == end0 then return {startRef} end
+
     if nav.compact ~= nil and nav.sourceSpan ~= nil and nav.spanToBase ~= nil and nav.spanNeighbors ~= nil
         and nav.compact.spanX ~= nil and nav.compact.spanZ ~= nil then
         return compactCorridor(nav, startRef, endRef, filter)
@@ -1172,6 +1196,7 @@ function Detour.findPath(nav, startRef, endRef, filter, endPos, positionedFilter
             if allowed then
                 if filter == nil then allowed = isWalkable(nav, neighbor) else allowed = passFilter(nav, neighbor, filter) end
             end
+
             if allowed then
                 touch(neighbor)
                 local neighborCenter = polyCenter(nav, neighbor)
@@ -1195,6 +1220,7 @@ function Detour.findPath(nav, startRef, endRef, filter, endPos, positionedFilter
             if allowed then
                 if filter == nil then allowed = isWalkable(nav, neighbor) else allowed = passFilter(nav, neighbor, filter) end
             end
+
             if allowed then
                 touch(neighbor)
                 local neighborCenter = polyCenter(nav, neighbor)
@@ -1224,6 +1250,7 @@ local function portalBetween(nav, fromRef, toRef)
         local v=vertexAt(nav.vertices,polyVertexIndex(nav,from0,extraLinkEdge(nav,link0)))
         return v,v
     end
+
     if toType==Detour.DT_POLYTYPE_OFFMESH_CONNECTION then
         local link0=findExtraLink(nav,to0,from0)
         if link0<0 then return nil end
@@ -1236,10 +1263,12 @@ local function portalBetween(nav, fromRef, toRef)
     for edge0 = 0, nv - 1 do
         if polyNeighbor(nav, from0, edge0) == to0 then edge = edge0; break end
     end
+
     if edge<0 then
         local link0=findExtraLink(nav,from0,to0)
         if link0>=0 and extraLinkEdge(nav,link0)<0xff then edge=extraLinkEdge(nav,link0); portalLink=link0 end
     end
+
     if edge < 0 then return nil end
     local ia = polyVertexIndex(nav, from0, edge)
     local ib = polyVertexIndex(nav, from0, (edge + 1) % nv)
@@ -1284,6 +1313,7 @@ function Detour.getPolyWallSegments(nav, ref, filter, includePortals)
             if includePortals==true and hi>lo then appendEdgeSegment(out,a,b,lo,hi,iv.ref) end
             cursor=math.max(cursor,hi)
         end
+
         if cursor<1 then appendEdgeSegment(out,a,b,cursor,1,0) end
     end
     return out
@@ -1331,6 +1361,7 @@ function Detour.raycast(nav, startRef, startPos, endPos, filter, options, prevRe
                 local from = startPos + (endPos - startPos) * currentT
                 pathCost += vector.magnitude(endPos - from) * areaCost(nav, current, filter)
             end
+
             return {
                 t = math.huge,
                 hitNormal = vector.zero,
@@ -1352,6 +1383,7 @@ function Detour.raycast(nav, startRef, startPos, endPos, filter, options, prevRe
                 bestT, bestU, bestEdge, bestA, bestB = t, u or 0, edge0, a, b
             end
         end
+
         if bestEdge < 0 then
             local hitPos = startPos + (endPos - startPos) * currentT
             return {
@@ -1397,6 +1429,7 @@ local function slicedNodeChain(state, target0)
         if current == state.start0 then break end
         current = state.parent[current]
     end
+
     if reverse[#reverse] ~= state.start0 then return nil end
     local chain = table.create(#reverse)
     for i = 1, #reverse do chain[i] = reverse[#reverse - i + 1] end
@@ -1410,6 +1443,7 @@ local function slicedReconstruct(nav, state, target0)
     local function appendRef(ref)
         if #path == 0 or path[#path] ~= ref then path[#path + 1] = ref end
     end
+
     for i = 1, #chain - 1 do
         local node0, next0 = chain[i], chain[i + 1]
         if state.detached[next0] then
@@ -1436,6 +1470,7 @@ local function slicedWalkableRadius(nav, startRef)
             if tn.header ~= nil and tn.header.walkableRadius ~= nil then return tn.header.walkableRadius end
         end
     end
+
     if nav.walkableRadius ~= nil then return nav.walkableRadius end
     if nav.header ~= nil and nav.header.walkableRadius ~= nil then return nav.header.walkableRadius end
     return 0
@@ -1481,6 +1516,7 @@ function Detour.updateSlicedFindPath(nav, maxIter)
             state.status = Detour.DT_SUCCESS
             break
         end
+
         if state.closed[current] or score > (state.total[current] or math.huge) + 1e-9 then continue end
         done += 1
         state.closed[current] = true
@@ -1523,6 +1559,7 @@ function Detour.updateSlicedFindPath(nav, maxIter)
                     foundShortcut = true
                 end
             end
+
             if not foundShortcut then
                 local dx,dy,dz=currentPos.X-nodePos.X,currentPos.Y-nodePos.Y,currentPos.Z-nodePos.Z
                 tentative = state.g[current] + math.sqrt(dx*dx+dy*dy+dz*dz) * areaCost(nav,current,state.filter)
@@ -1635,6 +1672,7 @@ function Detour.findPathPositioned(nav,startRef,endRef,startPos,endPos,filter,ma
                 neighbor=extraLinkTarget(nav,link0)
                 link0=extraLinkNext(nav,link0)
             end
+
             if neighbor<0 or neighbor==parent0 then continue end
             if not passFilter(nav,neighbor,filter) then continue end
             local neighborRef=poly0ToRef(nav,neighbor)
@@ -1672,6 +1710,7 @@ function Detour.findPathPositioned(nav,startRef,endRef,startPos,endPos,filter,ma
     local status=Detour.DT_SUCCESS
     if lastBest~=end0 then status=bit32.bor(status,Detour.DT_PARTIAL_RESULT) end
     if outOfNodes then status=bit32.bor(status,Detour.DT_OUT_OF_NODES) end
+
     if maxPath~=nil then
         maxPath=math.max(0,math.floor(maxPath))
         if #path>maxPath then
@@ -1777,6 +1816,7 @@ function Detour.getPathFromDijkstraSearch(nav, endRef)
         current = state.parents[current]
         if current == nil then return nil end
     end
+
     if reverse[#reverse] ~= poly0ToRef(nav,state.start) then return nil end
     local path = table.create(#reverse)
     for i = 1, #reverse do path[i] = reverse[#reverse - i + 1] end
@@ -1865,6 +1905,7 @@ function Detour.findDistanceToWall(nav, startRef, centerPos, maxRadius, filter)
                 if portalDist2<=maxDist2 and not visited[iv.poly] then visited[iv.poly]=true; queue[#queue+1]=iv.poly end
                 cursor=math.max(cursor,hi)
             end
+
             if cursor<1 then
                 local wa,wb=a+d*cursor,b
                 local edgePoint,edgeDist2=closestPointSeg2D(centerPos,wa,wb)
@@ -1942,6 +1983,7 @@ function Detour.findRandomPoint(nav, filter, frand)
         areaSum += polyArea
         if frand() * areaSum <= polyArea then chosen = poly0 end
     end
+
     if chosen == nil then return nil end
     local point = Detour.randomPointInConvexPoly(polygonVertices(nav, chosen), frand(), frand())
     if point == nil then return nil end
@@ -1961,6 +2003,7 @@ function Detour.findRandomPointAroundCircle(nav, startRef, centerPos, maxRadius,
         areaSum += polyArea
         if frand() * areaSum <= polyArea then chosen = poly0 end
     end
+
     if chosen == nil then return nil end
     local point = Detour.randomPointInConvexPoly(polygonVertices(nav, chosen), frand(), frand())
     if point == nil then return nil end
@@ -2015,15 +2058,19 @@ function Detour.newNavMeshQuery(nav, maxNodes)
 end
 
 function NavMeshQuery:getAttachedNavMesh() return self.nav end
+
 function NavMeshQuery:getNodePool()
     -- Luau cannot expose a native dtNodePool pointer, but the handle has the same stable ownership
     -- identity/lifetime as the query object and advertises the enforced node capacity.
     return self._nodePool
 end
+
 function NavMeshQuery:findPath(startRef,endRef,startPos,endPos,filter,maxPath)
     return Detour.findPathPositioned(self.nav,startRef,endRef,startPos,endPos,filter,maxPath,self.maxNodes)
 end
+
 function NavMeshQuery:findStraightPath(startPos,endPos,corridor,options) return Detour.findStraightPath(self.nav,startPos,endPos,corridor,options) end
+
 function NavMeshQuery:initSlicedFindPath(startRef,endRef,startPos,endPos,filter,options)
     local status=withQueryState(self,Detour.initSlicedFindPath,startRef,endRef,startPos,endPos,filter,options)
     if self._slicedQuery~=nil then
@@ -2033,6 +2080,7 @@ function NavMeshQuery:initSlicedFindPath(startRef,endRef,startPos,endPos,filter,
     end
     return status
 end
+
 function NavMeshQuery:updateSlicedFindPath(maxIter) return withQueryState(self,Detour.updateSlicedFindPath,maxIter) end
 function NavMeshQuery:finalizeSlicedFindPath() return withQueryState(self,Detour.finalizeSlicedFindPath) end
 function NavMeshQuery:finalizeSlicedFindPathPartial(existing) return withQueryState(self,Detour.finalizeSlicedFindPathPartial,existing) end
@@ -2054,6 +2102,7 @@ function NavMeshQuery:closestPointOnPoly(ref,pos) return Detour.closestPointOnPo
 function NavMeshQuery:closestPointOnPolyBoundary(ref,pos) return Detour.closestPointOnPolyBoundary(self.nav,ref,pos) end
 function NavMeshQuery:getPolyHeight(ref,pos) return Detour.getPolyHeight(self.nav,ref,pos) end
 function NavMeshQuery:isValidPolyRef(ref,filter) return Detour.isValidPolyRef(self.nav,ref,filter) end
+
 function NavMeshQuery:isInClosedList(ref)
     local poly0=refToPoly0(self.nav,ref)
     if poly0<0 then return false end
@@ -2147,6 +2196,7 @@ function Detour.query(nav, startPos, endPos, extents, filter)
     if corridor == nil or Detour.statusFailed(pathStatus) or Detour.statusDetail(pathStatus,Detour.DT_PARTIAL_RESULT) then return nil, 'no path' end
     local straight = Detour.findStraightPath(nav, nearestStart, nearestEnd, corridor)
     if straight == nil then return nil, 'invalid corridor' end
+
     return {
         startRef = startRef,
         endRef = endRef,
@@ -2182,6 +2232,7 @@ local OFFMESH_CON_BYTES = 24
 function Detour.addOffMeshConnections(nav, connections, options)
     options = options or {}
     if connections == nil or #connections == 0 then return nav end
+
     if nav.offMeshConCount ~= nil and nav.offMeshConCount > 0 then
         error('off-mesh connections are already attached to this navmesh', 2)
     end
@@ -2222,10 +2273,12 @@ function Detour.addOffMeshConnections(nav, connections, options)
             local dx,dz = startNearest.X-startPos.X,startNearest.Z-startPos.Z
             if dx*dx+dz*dz > radius*radius then startRef,startNearest=nil,nil end
         end
+
         if endNearest ~= nil then
             local dx,dz = endNearest.X-endPos.X,endNearest.Z-endPos.Z
             if dx*dx+dz*dz > radius*radius then endRef,endNearest=nil,nil end
         end
+
         resolved[i] = {
             start = startNearest or startPos, finish = endNearest or endPos,
             startRef = startRef, endRef = endRef, radius = radius,
@@ -2291,6 +2344,7 @@ function Detour.addOffMeshConnections(nav, connections, options)
             local start0=refToPoly0(nav,con.startRef)
             addLink(p0,start0,0); addLink(start0,p0,0xff)
         end
+
         if con.endRef~=nil then
             local end0=refToPoly0(nav,con.endRef)
             addLink(p0,end0,1)
@@ -2368,6 +2422,7 @@ function Detour.loadNavMeshData(data)
                 addLink(p0,start0,0,0xff); addLink(start0,p0,0xff,0xff)
             end
         end
+
         if con.side==0xff then
             local endRef,endPt=Detour.findNearestPoly(nav,con.finish,ext,nil)
             if endPt~=nil then
@@ -2432,6 +2487,7 @@ end
 function Detour.setPolyFlags(nav, ref, flags)
     local tri0 = refToPoly0(nav, ref)
     if tri0 < 0 or tri0 >= nav.polyCount then return false end
+
     if nav.sourceSpan ~= nil and nav.spanToBase ~= nil then
         local span = buffer.readu32(nav.sourceSpan, tri0 * 4)
         local base = buffer.readi32(nav.spanToBase, span * 4)
@@ -2455,6 +2511,7 @@ function Detour.setPolyArea(nav, ref, area)
     local tri0 = refToPoly0(nav, ref)
     if tri0 < 0 or tri0 >= nav.polyCount then return false end
     if area < 0 or area >= Detour.DT_MAX_AREAS then error('area must be in [0, 63]', 2) end
+
     if nav.sourceSpan ~= nil and nav.spanToBase ~= nil then
         local span = buffer.readu32(nav.sourceSpan, tri0 * 4)
         local base = buffer.readi32(nav.spanToBase, span * 4)
@@ -2473,7 +2530,7 @@ function Detour.buildCompactNavMesh(chf)
     local spanToBase = buffer.create(chf.spanCount * 4)
     buffer.fill(spanToBase, 0, 0xff)
 
-    local walkableSpans = data.count(chf.areas, 'u8', 0, chf.spanCount, 'ne', Recast.RC_NULL_AREA)
+    local walkableSpans = data.countWhere(chf.areas, 'u8', 0, chf.spanCount, 'ne', Recast.RC_NULL_AREA)
 
     local vertexCount = walkableSpans * 4
     local polyCount = walkableSpans * 2
@@ -2556,6 +2613,7 @@ function Detour.buildCompactNavMesh(chf)
                 local span = first + li
                 local base = buffer.readi32(spanToBase, span * 4)
                 if base < 0 then continue end
+
                 for dir0 = 0, 3 do
                     local con = compactCon(chf, span, dir0)
                     if con == Recast.RC_NOT_CONNECTED then continue end
@@ -2672,12 +2730,15 @@ local function nextPow2(v)
     while p<v do p*=2 end
     return p
 end
+
 local function ilog2(v)
     local n=0
     while v>1 do v=math.floor(v/2); n+=1 end
     return n
 end
+
 local function refMask(bits) return 2^bits-1 end
+
 local function tiledPosHash(x,y,mask)
     local h1=bit32.band(0x8da6b343,mask); local h2=bit32.band(0xd8163841,mask)
     return bit32.band(h1*bit32.band(x,mask)+h2*bit32.band(y,mask),mask)
@@ -2688,6 +2749,7 @@ function Detour.encodePolyId(nav,salt,it,ip)
     if c==nil then return ip+1 end
     return (salt%2^c.saltBits)*2^(c.tileBits+c.polyBits)+(it%2^c.tileBits)*2^c.polyBits+(ip%2^c.polyBits)
 end
+
 function Detour.decodePolyId(nav,ref)
     local c=nav.refCodec
     if c==nil then return 0,0,ref-1 end
@@ -2696,6 +2758,7 @@ function Detour.decodePolyId(nav,ref)
     local salt=math.floor(ref/2^(c.polyBits+c.tileBits))%2^c.saltBits
     return salt,it,ip
 end
+
 function Detour.decodePolyIdSalt(nav,ref) local s0=Detour.decodePolyId(nav,ref); return s0 end
 function Detour.decodePolyIdTile(nav,ref) local _,it=Detour.decodePolyId(nav,ref); return it end
 function Detour.decodePolyIdPoly(nav,ref) local _,_,ip=Detour.decodePolyId(nav,ref); return ip end
@@ -2713,6 +2776,7 @@ function Detour.newTiledNavMesh(params)
     local freeTiles=table.create(maxTiles)
     for i=maxTiles-1,0,-1 do buffer.writeu32(salts,i*4,1); freeTiles[#freeTiles+1]=i end
     local tileLutSize=nextPow2(math.floor(maxTiles/4)); if tileLutSize<1 then tileLutSize=1 end
+
     return {
         _tiled=true, refCodec={tileBits=tileBits,polyBits=polyBits,saltBits=saltBits},
         maxTiles=maxTiles,maxPolys=maxPolys,tileSalts=salts,tiles=table.create(maxTiles),
@@ -2735,12 +2799,15 @@ function Detour.calcTileLoc(nav,pos: vector)
     if not nav._tiled then return 0,0 end
     return math.floor((pos.X-nav.orig.X)/nav.tileWidth),math.floor((pos.Z-nav.orig.Z)/nav.tileHeight)
 end
+
 function Detour.getMaxTiles(nav) return nav._tiled and nav.maxTiles or 1 end
+
 function Detour.getTile(nav,index0)
     if not nav._tiled then return if index0==0 then nav else nil end
     if index0<0 or index0>=nav.maxTiles then return nil end
     return nav.tiles[index0+1]
 end
+
 function Detour.getTileAt(nav,x,y,layer)
     layer=layer or 0
     if not nav._tiled then return if x==0 and y==0 and layer==0 then nav else nil end
@@ -2752,6 +2819,7 @@ function Detour.getTileAt(nav,x,y,layer)
     end
     return nil
 end
+
 function Detour.getTilesAt(nav,x,y,maxTiles)
     local out={}; maxTiles=maxTiles or math.huge
     if not nav._tiled then if x==0 and y==0 and maxTiles>0 then out[1]=nav end; return out end
@@ -2763,14 +2831,17 @@ function Detour.getTilesAt(nav,x,y,maxTiles)
     end
     return out
 end
+
 function Detour.getTileRef(nav,tile)
     if not nav._tiled then return tile==nav and 1 or 0 end
     if tile==nil or tile.index==nil then return 0 end
     return Detour.encodePolyId(nav,tile.salt,tile.index,0)
 end
+
 function Detour.getTileRefAt(nav,x,y,layer)
     local t=Detour.getTileAt(nav,x,y,layer); return t and Detour.getTileRef(nav,t) or 0
 end
+
 function Detour.getTileByRef(nav,ref)
     if not nav._tiled then return ref==1 and nav or nil end
     local salt,it,ip=Detour.decodePolyId(nav,ref)
@@ -2810,6 +2881,7 @@ local function rebuildTiledAggregate(nav)
     local nextOff=0
 
     local function queueLink(from0,to0,edge) linkList[#linkList+1]={from=from0,to=to0,edge=edge} end
+
     for _,t in active do
         local src=t.nav; local vb,pb=t.vertexBase,t.polyBase
         buffer.copy(vertices,vb*12,src.vertices,0,src.vertexCount*12)
@@ -2825,6 +2897,7 @@ local function rebuildTiledAggregate(nav)
             end
             local l=firstExtraLink(src,lp)
             while l>=0 do queueLink(gp,pb+extraLinkTarget(src,l),extraLinkEdge(src,l)); l=extraLinkNext(src,l) end
+
             if offMap~=nil and polyType(src,lp)==Detour.DT_POLYTYPE_OFFMESH_CONNECTION and src.offMeshPolyToCon~=nil then
                 local lc=buffer.readi32(src.offMeshPolyToCon,lp*4)
                 if lc>=0 then
@@ -3062,6 +3135,7 @@ local function attachTiledPortalEdge(nav,tile,poly0,localEdge,a,b,dir0,walkableC
                 -- Match the same side-coordinate restriction as findConnectingPolys().
                 if math.abs(tiledPortalSlabCoord(dir0,a)-tiledPortalSlabCoord(entry.dir,entry.a))>0.01 then continue end
                 if forwardCount<4 and appendDirectionalPortalLink(nav,poly0,localEdge,dir0,a,b,entry,entry.walkableClimb or 0) then forwardCount+=1 end
+
                 if reverseCount<4 then
                     local back={ref=ref,dir=dir0,a=a,b=b}
                     if appendDirectionalPortalLink(nav,other0,entry.edge,entry.dir,entry.a,entry.b,back,walkableClimb or 0) then reverseCount+=1 end
@@ -3111,6 +3185,7 @@ local function appendTileGeometry(nav,tile)
             buffer.writeu32(nav.polyIndices,io,0xffffffff)
             buffer.writei32(nav.neighbors,io,-1)
         end
+
         for e=0,nv-1 do
             buffer.writeu32(nav.polyIndices,(gp*nav.nvp+e)*4,vb+polyVertexIndex(src,lp,e))
             local nei=polyNeighbor(src,lp,e)
@@ -3130,6 +3205,7 @@ local function appendTileGeometry(nav,tile)
             end
             link0=extraLinkNext(src,link0)
         end
+
         if polyType(src,lp)==Detour.DT_POLYTYPE_OFFMESH_CONNECTION and src.offMeshPolyToCon~=nil then
             local lc=buffer.readi32(src.offMeshPolyToCon,lp*4)
             if lc>=0 then
@@ -3201,6 +3277,7 @@ end
 local function connectTiledExternalOffMesh(nav,sourceTile,landingTile)
     local src=sourceTile.nav
     if src.offMeshConCount==nil or src.offMeshConCount==0 or src.offMeshSides==nil then return end
+
     for c0=0,src.offMeshConCount-1 do
         local side=buffer.readu8(src.offMeshSides,c0)
         local tx,ty=externalSideTarget(sourceTile.x,sourceTile.y,side)
@@ -3262,6 +3339,7 @@ function Detour.addTile(nav,tileNav,x,y,layer,lastRef)
         index=nav.freeTiles[n]; nav.freeTiles[n]=nil
         salt=buffer.readu32(nav.tileSalts,index*4)
     end
+
     if salt==0 then salt=1 end; buffer.writeu32(nav.tileSalts,index*4,salt)
     local tile={nav=tileNav,x=x,y=y,layer=layer,index=index,salt=salt,userId=tileNav.userId or 0,_nextPos=-1}
     nav.tiles[index+1]=tile
