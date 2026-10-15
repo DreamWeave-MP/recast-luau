@@ -117,3 +117,65 @@ against head, best of five:
 `jess run --profile` on the 64516-polygon run counted 94 million native blocks a build at base
 and 21 million with the argsort in; the three merge loops that led the profile are gone from it,
 not moved.
+
+## Which modules are native, and why
+
+Jess compiles to machine code only what is marked (`--!native` on a module, `@native` on one
+function), and every load pays for what is marked. A module carries `--!native` when a row below
+spends its time there and the module is small (12 KB or less); a larger module carries `@native`
+on the functions the row spends its time in, and nothing else.
+
+Measured 2026-10-15 with `jess 0.1.0`, the verified release build of jess `07c38cb` on l3i
+2.0.3, on the i7-10870H, the one-minute load 1.10 and 1.23 at the start of the two
+sessions. In each session the bench ran alternately on this package and on a copy of it with
+every module marked, three fresh runs of `bench/bench.jsl` each, every run's row the median of
+its batches; a column is the median of the three, and a ratio is against the all-marked runs of
+the same session. Which functions a row spends its time in comes from `jess run --profile` of
+that row alone, unmarked. The load cost is a fresh `jess run --package <this package>
+--package-path jpk` of a script that only requires `@recast`, the two sides alternating, the
+median of five each after one warm-up.
+
+| Requiring `@recast` | All marked | This state |
+| --- | ---: | ---: |
+| Unmarked | 0.268 s | 0.093 s |
+| Final | 0.244 s | 0.233 s |
+
+| Row | All marked (ms) | Unmarked / all marked | Final (ms) | Final / all marked |
+| --- | ---: | ---: | ---: | ---: |
+| tile, 16129 polygons, no BV tree | 2.193 | **8.309×** | 2.038 | 0.930× |
+| tile, 16129 polygons, BV tree | 12.03 | **4.458×** | 12.09 | 1.005× |
+| tile, 16129 polygons with a detail mesh, BV tree | 12.94 | **4.497×** | 13.02 | 1.007× |
+| tile, 64516 polygons, no BV tree | 9.624 | **7.422×** | 9.458 | 0.983× |
+| tile, 64516 polygons, BV tree | 52.63 | **4.344×** | 52.76 | 1.003× |
+| tile, a strip of 15 by 4000 polygons, BV tree | 39.32 | **5.229×** | 39.73 | 1.010× |
+| recast build with detail, 512 triangles | 9.737 | **6.998×** | 9.813 | 1.008× |
+| tile from a recast build, BV tree | 0.00581 | **6.219×** | 0.00576 | 0.991× |
+| load a tile from a recast build | 0.00607 | **2.875×** | 0.00602 | 0.993× |
+| recast build, maze of 7392 triangles | 12.50 | **4.542×** | 12.32 | 0.985× |
+| query a path through the maze | 0.03985 | **3.833×** | 0.03846 | 0.965× |
+| rasterize 32768 triangles | 19.97 | **4.317×** | 19.28 | 0.965× |
+| runtime navmesh from 16384 polygons | 12.82 | **4.604×** | 12.75 | 0.994× |
+| 1000 box queries over 16384 polygons | 6.323 | **3.872×** | 6.263 | 0.991× |
+| 1000 nearest-polygon queries over 16384 polygons | 45.34 | **3.370×** | 45.13 | 0.995× |
+| find a path across 9216 polygons | 3.469 | **3.976×** | 3.304 | 0.952× |
+| find a positioned path across 9216 polygons | 0.2346 | **3.595×** | 0.2265 | 0.966× |
+| straighten a path of 191 polygons | 0.06747 | **3.953×** | 0.06570 | 0.974× |
+| crowd of 256 agents, 10 updates | 9.762 | **4.956×** | 9.903 | 1.014× |
+| tile cache, 64 tiles under 8 obstacles | 0.5374 | **2.208×** | 0.5284 | 0.983× |
+| tiled navmesh, add 64 tiles | 1.080 | **1.888×** | 1.064 | 0.985× |
+| tiled navmesh, find a path across 64 tiles | 0.04680 | **3.792×** | 0.04660 | 0.996× |
+| tiled navmesh, 10000 tile lookups | 0.7142 | **2.991×** | 0.7395 | 1.036× |
+
+What carries the directive (every module here is one a row spends its time in, unmarked):
+
+- Whole: `common`, `crowd`, `detail`, `detour`, `navmesh_builder`, `proximity_grid`, `recast`,
+  `tilecache`.
+- Unmarked: `init`, `local_boundary`, `navmesh`, `obstacle_avoidance`, `path_corridor`,
+  `path_queue`.
+
+Marking only the functions the rows' profiles named saved 0.13 s a load and left the builds 1.9x
+to 3.0x slower than all marked (the maze of 7,392 triangles from 13 ms to 39 ms) and the crowd
+update and the path and nearest-polygon queries 1.2x to 1.6x slower, which a game runs every
+frame. Whole, the modules those rows spend their time in bring every row within 5% of all marked,
+and the five crowd helpers no row reaches, with the entry, still load as bytecode: requiring
+`@recast` costs 0.012 s less than all marked.
