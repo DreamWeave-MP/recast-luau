@@ -1,5 +1,3 @@
---!native
-
 local Recast = require('@recast/core')
 local Detour = require('@recast/detour')
 local Crowd = require('@recast/crowd')

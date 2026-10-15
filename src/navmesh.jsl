@@ -1,5 +1,3 @@
---!native
-
 -- Pure-Luau dtNavMesh identity/tile-management core.
 -- This intentionally mirrors Detour's 32-bit dtPolyRef packing and tile lifecycle semantics.
 

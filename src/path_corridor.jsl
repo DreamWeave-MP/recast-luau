@@ -1,5 +1,3 @@
---!native
-
 -- Altered pure-Luau port of DetourCrowd's dtPathCorridor.
 local Detour = require('@recast/detour')
 local Corridor = {}

@@ -1,5 +1,3 @@
---!native
-
 -- Altered pure-Luau port of DetourObstacleAvoidance.
 -- The query keeps a fixed reusable obstacle pool and implements both grid and adaptive samplers.
 
