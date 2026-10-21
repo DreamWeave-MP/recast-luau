@@ -1,0 +1,49 @@
+{
+  "schema_version": "3",
+  "document": "lock",
+  "project": "9b956581-d9f4-4a41-b46b-3e70dca1f086",
+  "note": "Written by CI when a release tag is pushed: what each published release's archive contains. Do not edit.",
+  "releases": [
+    {
+      "version": "0.2.0",
+      "locked_from": "78113ebaf6c9d43e289c00e02d89e312b664e38d",
+      "artifacts": [
+        {
+          "id": "jpk",
+          "format": "jpk",
+          "filename": "org.dreamweave.recast-0.2.0.jpk",
+          "media_type": "application/vnd.jess.jpk",
+          "size": 302042,
+          "digests": {
+            "sha256": "75bf4ea642ef130d9ec1c8e26d19ed241a2b6b22fcf8bc678a192a41bc1cf44c"
+          },
+          "jess": {
+            "package": "org.dreamweave.recast",
+            "jess_api": "1",
+            "content_digest": "aabfe01cf0d427e303d8c32e9f8c6f100d364ec5e967b03f7a06b70b63d7fe44",
+            "dependencies": {}
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "recast-luau",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
+    }
+  ]
+}
